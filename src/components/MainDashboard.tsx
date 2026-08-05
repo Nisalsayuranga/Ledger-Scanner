@@ -21,6 +21,7 @@ export interface BatchItem {
   data?: any[];
   rawFile?: File;
   pageImages?: string[];
+  pdfUrl?: string;
 }
 
 interface Props {

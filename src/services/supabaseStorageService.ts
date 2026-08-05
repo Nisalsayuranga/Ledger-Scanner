@@ -10,6 +10,45 @@ interface SaveBatchOptions {
   ledgers: DailyLedger[];
 }
 
+const getStoragePathFromUrl = (url: string) => {
+  const marker = "/public/ledger-documents/";
+  const idx = url.indexOf(marker);
+  if (idx !== -1) {
+    return decodeURIComponent(url.substring(idx + marker.length));
+  }
+  return null;
+};
+
+export const uploadPdfToSupabase = async (
+  file: File,
+  branchName: string,
+  year: number,
+  month: number,
+  bookCategory: BookCategory
+): Promise<string> => {
+  // Clean filename to remove spaces
+  const cleanFilename = file.name.replace(/\s+/g, "_");
+  const filePath = `${branchName}/${year}/${month}/${bookCategory}/${cleanFilename}`;
+
+  const { error } = await supabase.storage
+    .from("ledger-documents")
+    .upload(filePath, file, {
+      cacheControl: "3600",
+      upsert: true
+    });
+
+  if (error) {
+    console.error("Storage upload error:", error);
+    throw error;
+  }
+
+  const { data } = supabase.storage
+    .from("ledger-documents")
+    .getPublicUrl(filePath);
+
+  return data.publicUrl;
+};
+
 export const deleteBatchFromSupabase = async (
   batchIdOrFilename: string,
   branchName?: string,
@@ -20,6 +59,20 @@ export const deleteBatchFromSupabase = async (
   try {
     // 1. Delete by exact batch ID if provided
     if (batchIdOrFilename && batchIdOrFilename.includes("-") && !batchIdOrFilename.includes(".")) {
+      // Find existing batch first to delete its storage object
+      const { data } = await supabase
+        .from("ledger_batches")
+        .select("original_pdf_url")
+        .eq("id", batchIdOrFilename)
+        .maybeSingle();
+
+      if (data?.original_pdf_url) {
+        const storagePath = getStoragePathFromUrl(data.original_pdf_url);
+        if (storagePath) {
+          await supabase.storage.from("ledger-documents").remove([storagePath]);
+        }
+      }
+
       await supabase.from("ledger_batches").delete().eq("id", batchIdOrFilename);
     }
 
@@ -32,6 +85,23 @@ export const deleteBatchFromSupabase = async (
         .maybeSingle();
 
       if (branchData) {
+        // Find existing batch first to delete its storage object
+        const { data: batchToDel } = await supabase
+          .from("ledger_batches")
+          .select("original_pdf_url")
+          .eq("branch_id", branchData.id)
+          .eq("year", year)
+          .eq("month", month)
+          .eq("book_category", bookCategory)
+          .maybeSingle();
+
+        if (batchToDel?.original_pdf_url) {
+          const storagePath = getStoragePathFromUrl(batchToDel.original_pdf_url);
+          if (storagePath) {
+            await supabase.storage.from("ledger-documents").remove([storagePath]);
+          }
+        }
+
         await supabase
           .from("ledger_batches")
           .delete()
@@ -224,18 +294,25 @@ export const fetchBatchesFromSupabase = async () => {
       return [];
     }
 
-    return batchesData.map((b: any) => ({
-      id: b.id,
-      filename: b.original_pdf_url || "Ledger_Book.pdf",
-      branchName: b.branches?.branch_name || "Kiribathgoda",
-      year: b.year || 2025,
-      month: b.month || 10,
-      bookCategory: (b.book_category || "lr_book") as BookCategory,
-      fileSize: "Uploaded",
-      pageCount: b.daily_ledgers?.length || 0,
-      extractedDate: b.batch_month || "2025-10",
-      status: (b.status === "completed" ? "Completed" : "Pending") as "Completed" | "Pending",
-      data: (b.daily_ledgers || []).map((dl: any) => ({
+    return batchesData.map((b: any) => {
+      const isCloudUrl = b.original_pdf_url && b.original_pdf_url.startsWith("http");
+      const cleanFilename = isCloudUrl 
+        ? b.original_pdf_url.substring(b.original_pdf_url.lastIndexOf("/") + 1)
+        : (b.original_pdf_url || "Ledger_Book.pdf");
+
+      return {
+        id: b.id,
+        filename: cleanFilename,
+        branchName: b.branches?.branch_name || "Kiribathgoda",
+        year: b.year || 2025,
+        month: b.month || 10,
+        bookCategory: (b.book_category || "lr_book") as BookCategory,
+        fileSize: "Uploaded",
+        pageCount: b.daily_ledgers?.length || 0,
+        extractedDate: b.batch_month || "2025-10",
+        status: (b.status === "completed" ? "Completed" : "Pending") as "Completed" | "Pending",
+        pdfUrl: isCloudUrl ? b.original_pdf_url : undefined,
+        data: (b.daily_ledgers || []).map((dl: any) => ({
         id: dl.id,
         day_number: dl.day_number,
         date: dl.date,
@@ -273,7 +350,8 @@ export const fetchBatchesFromSupabase = async () => {
           row_order: tx.row_order
         }))
       }))
-    }));
+    };
+  });
   } catch (err) {
     console.error("Failed to fetch batches from Supabase DB:", err);
     return [];

@@ -5,7 +5,7 @@ import { UploadMetadata } from "./components/PdfUploader";
 import { convertPdfToImages } from "./services/pdfProcessor";
 import { extractLedgerFromImage } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
-import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase } from "./services/supabaseStorageService";
+import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase, uploadPdfToSupabase } from "./services/supabaseStorageService";
 import { getAllBatchesFromIndexedDb, saveBatchToIndexedDb, saveAllBatchesToIndexedDb, deleteBatchFromIndexedDb } from "./services/indexedDbStorage";
 import { detectBranchAndCategoryFromFilename } from "./utils/filenameDetector";
 import { DailyLedger } from "./types/ledger";
@@ -101,10 +101,12 @@ export const App: React.FC = () => {
         if (!pageImages || pageImages.length === 0) {
           if (targetBatch.rawFile) {
             pageImages = await convertPdfToImages(targetBatch.rawFile);
-          } else if (targetBatch.filename) {
-            const pdfUrl = targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
-              ? targetBatch.filename
-              : `/${targetBatch.filename}`;
+          } else {
+            const pdfUrl = targetBatch.pdfUrl || (
+              targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
+                ? targetBatch.filename
+                : `/${targetBatch.filename}`
+            );
             pageImages = await convertPdfToImages(pdfUrl);
           }
         }
@@ -190,7 +192,7 @@ export const App: React.FC = () => {
           year: updatedBatch.year,
           month: updatedBatch.month,
           bookCategory: updatedBatch.bookCategory,
-          batchName: updatedBatch.filename,
+          batchName: updatedBatch.pdfUrl || updatedBatch.filename,
           ledgers: parsedLedgers
         }).catch((e) => console.error("Auto DB save warn:", e));
 
@@ -271,7 +273,7 @@ export const App: React.FC = () => {
         year: activeBatch.year,
         month: activeBatch.month,
         bookCategory: activeBatch.bookCategory,
-        batchName: activeBatch.filename,
+        batchName: activeBatch.pdfUrl || activeBatch.filename,
         ledgers: activeLedgers
       });
       if (res.success) {
@@ -295,10 +297,20 @@ export const App: React.FC = () => {
       const detected = detectBranchAndCategoryFromFilename(file.name);
 
       let imgs: string[] = [];
+      let cloudUrl: string | undefined = undefined;
       try {
         imgs = await convertPdfToImages(file);
+        
+        setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
+        cloudUrl = await uploadPdfToSupabase(
+          file,
+          detected.branchName,
+          detected.year,
+          detected.month,
+          detected.bookCategory
+        );
       } catch (e) {
-        console.error(`Failed to convert PDF ${file.name}:`, e);
+        console.error(`Failed to convert/upload PDF ${file.name}:`, e);
       }
 
       const item: BatchItem = {
@@ -314,7 +326,8 @@ export const App: React.FC = () => {
         status: "Pending",
         data: [],
         rawFile: file,
-        pageImages: imgs
+        pageImages: imgs,
+        pdfUrl: cloudUrl
       };
 
       newBatches.push(item);
@@ -333,6 +346,15 @@ export const App: React.FC = () => {
 
       const pageImages = await convertPdfToImages(file);
 
+      setProgressText(`Uploading PDF to Supabase Storage...`);
+      const cloudUrl = await uploadPdfToSupabase(
+        file,
+        metadata.branchName,
+        metadata.year,
+        metadata.month,
+        metadata.bookCategory
+      );
+
       const newBatchItem: BatchItem = {
         id: `batch-${Date.now()}`,
         filename: file.name,
@@ -346,7 +368,8 @@ export const App: React.FC = () => {
         status: "Pending",
         data: [],
         rawFile: file,
-        pageImages: pageImages
+        pageImages: pageImages,
+        pdfUrl: cloudUrl
       };
 
       saveBatchToIndexedDb(newBatchItem);
@@ -434,8 +457,8 @@ export const App: React.FC = () => {
       ) : (
         <SideBySideDashboard
           batchName={`${activeBatch.branchName} - ${activeBatch.filename} (${activeBatch.bookCategory === 'lr_book' ? 'L/R Book' : 'M Book'})`}
-          pdfUrl={`/${activeBatch.filename}`}
-          secondaryPdfUrl={secondaryBatch ? `/${secondaryBatch.filename}` : undefined}
+          pdfUrl={activeBatch.pdfUrl || `/${activeBatch.filename}`}
+          secondaryPdfUrl={secondaryBatch ? (secondaryBatch.pdfUrl || `/${secondaryBatch.filename}`) : undefined}
           initialDayIndex={activeDayIndex}
           ledgers={activeLedgers}
           secondaryLedgers={secondaryLedgers.length > 0 ? secondaryLedgers : (secondaryBatch?.data || [])}
@@ -454,7 +477,7 @@ export const App: React.FC = () => {
                 year: updatedBatch.year,
                 month: updatedBatch.month,
                 bookCategory: updatedBatch.bookCategory,
-                batchName: updatedBatch.filename,
+                batchName: updatedBatch.pdfUrl || updatedBatch.filename,
                 ledgers: updatedLedgers
               }).catch((e) => console.error("Auto Supabase update warn:", e));
             }

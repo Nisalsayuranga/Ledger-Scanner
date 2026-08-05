@@ -6,7 +6,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.j
 export const convertPdfToImages = async (fileOrUrl: File | string | ArrayBuffer): Promise<string[]> => {
   let docInit: any;
   if (typeof fileOrUrl === "string") {
-    docInit = { url: fileOrUrl };
+    const res = await fetch(fileOrUrl);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch PDF file from cloud: ${res.status} ${res.statusText}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    docInit = { data: arrayBuffer };
   } else if (fileOrUrl instanceof File) {
     const arrayBuffer = await fileOrUrl.arrayBuffer();
     docInit = { data: arrayBuffer };
