@@ -23,6 +23,14 @@ export const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressText, setProgressText] = useState("");
 
+  const [bgTask, setBgTask] = useState<{
+    id: string;
+    filename: string;
+    progress: number;
+    total: number;
+    progressText: string;
+  } | null>(null);
+
   // Restore batches from IndexedDB + Supabase DB on app mount
   useEffect(() => {
     let isMounted = true;
@@ -62,6 +70,144 @@ export const App: React.FC = () => {
       saveAllBatchesToIndexedDb(batches);
     }
   }, [batches]);
+
+  // Background OCR processor queue loop
+  useEffect(() => {
+    // If a background task is already actively processing, do nothing
+    if (bgTask) return;
+
+    // Find the oldest pending batch (oldest first, so reverse batches array)
+    const nextPending = [...batches].reverse().find((b) => b.status === "Pending");
+    if (!nextPending) return;
+
+    const processBatchInBackground = async (targetBatch: BatchItem) => {
+      // 1. Set background task state
+      setBgTask({
+        id: targetBatch.id,
+        filename: targetBatch.filename,
+        progress: 0,
+        total: targetBatch.pageCount || 1,
+        progressText: `Preparing pages for ${targetBatch.filename}...`
+      });
+
+      // 2. Set the batch status to "Processing" in local state
+      setBatches((prev) =>
+        prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Processing" } : b))
+      );
+
+      try {
+        let pageImages: string[] = targetBatch.pageImages || [];
+
+        if (!pageImages || pageImages.length === 0) {
+          if (targetBatch.rawFile) {
+            pageImages = await convertPdfToImages(targetBatch.rawFile);
+          } else if (targetBatch.filename) {
+            const pdfUrl = targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
+              ? targetBatch.filename
+              : `/${targetBatch.filename}`;
+            pageImages = await convertPdfToImages(pdfUrl);
+          }
+        }
+
+        if (pageImages.length === 0) {
+          throw new Error("No page images rendered.");
+        }
+
+        const yearStr = targetBatch.year || 2025;
+        const monthStr = String(targetBatch.month || 10).padStart(2, "0");
+        const parsedLedgers: DailyLedger[] = [];
+
+        const CHUNK_SIZE = 5;
+        for (let i = 0; i < pageImages.length; i += CHUNK_SIZE) {
+          const chunk = pageImages.slice(i, i + CHUNK_SIZE);
+          const startPage = i + 1;
+          const endPage = Math.min(i + CHUNK_SIZE, pageImages.length);
+
+          const pendingCount = batches.filter(b => b.status === "Pending" && b.id !== targetBatch.id).length;
+          const queueInfo = pendingCount > 0 ? ` (${pendingCount} queued)` : "";
+
+          setBgTask({
+            id: targetBatch.id,
+            filename: targetBatch.filename,
+            progress: startPage - 1,
+            total: pageImages.length,
+            progressText: `Scanning Pages ${startPage}–${endPage} of ${pageImages.length} with Gemini...${queueInfo}`
+          });
+
+          const chunkResults = await Promise.all(
+            chunk.map(async (imgUrl, chunkIdx) => {
+              const pageNum = i + chunkIdx + 1;
+              const defaultDate = `${yearStr}-${monthStr}-${String(pageNum).padStart(2, "0")}`;
+
+              try {
+                const extracted = await extractLedgerFromImage(imgUrl);
+                return {
+                  day_number: pageNum,
+                  date: extracted.meta?.date || defaultDate,
+                  staff_name: extracted.meta?.staff || "Staff",
+                  cp_balance: extracted.meta?.cp_balance || 0,
+                  opening_balance: extracted.summary?.opening_balance || 0,
+                  cash_in: extracted.summary?.cash_in || 0,
+                  cash_out: extracted.summary?.cash_out || 0,
+                  total_loan: extracted.summary?.total_loan || 0,
+                  total_redeem: extracted.summary?.total_redeem || 0,
+                  receive: extracted.summary?.receive || 0,
+                  recovery: extracted.summary?.recovery || 0,
+                  insurance: extracted.summary?.insurance || 0,
+                  expenses: extracted.summary?.expenses || 0,
+                  calculated_closing_balance: extracted.summary?.closing_balance || 0,
+                  actual_cash_count: extracted.summary?.actual_cash_count || 0,
+                  variance: extracted.summary?.variance || 0,
+                  is_validated: false,
+                  page_image_url: imgUrl,
+                  transactions: extracted.transactions || []
+                } as DailyLedger;
+              } catch (ocrErr) {
+                console.error(`Page ${pageNum} OCR error:`, ocrErr);
+                throw new Error(`Page ${pageNum} failed: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`);
+              }
+            })
+          );
+
+          parsedLedgers.push(...chunkResults);
+        }
+
+        // Successfully completed scan
+        const updatedBatch: BatchItem = {
+          ...targetBatch,
+          pageImages,
+          pageCount: parsedLedgers.length,
+          status: "Completed",
+          data: parsedLedgers
+        };
+
+        setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b)));
+        saveBatchToIndexedDb(updatedBatch);
+
+        // Auto save to Supabase Database
+        await saveBatchToSupabase({
+          branchName: updatedBatch.branchName,
+          year: updatedBatch.year,
+          month: updatedBatch.month,
+          bookCategory: updatedBatch.bookCategory,
+          batchName: updatedBatch.filename,
+          ledgers: parsedLedgers
+        }).catch((e) => console.error("Auto DB save warn:", e));
+
+      } catch (err: any) {
+        console.error("Background OCR error:", err);
+        // Reset status to Pending to let user re-queue or see failure
+        setBatches((prev) =>
+          prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Pending" } : b))
+        );
+        alert(`Background OCR failed for ${targetBatch.filename}: ${err?.message || String(err)}`);
+      } finally {
+        setBgTask(null);
+      }
+    };
+
+    processBatchInBackground(nextPending);
+  }, [batches, bgTask]);
 
   const ensureLedgerDays = (batch: BatchItem): DailyLedger[] => {
     if (batch.data && batch.data.length > 0) return batch.data;
@@ -219,130 +365,11 @@ export const App: React.FC = () => {
     );
   };
 
-  // DIRECT OCR SCANNING: Run Gemini Vision OCR directly on all pages -> Populate tables -> Save to Supabase DB -> Open Dashboard!
-  const handleRunOcrOnBatch = async (targetBatch: BatchItem) => {
-    try {
-      setIsProcessing(true);
-      setProgressText(`Preparing PDF pages for ${targetBatch.filename}...`);
-
-      let pageImages: string[] = targetBatch.pageImages || [];
-
-      if (!pageImages || pageImages.length === 0) {
-        if (targetBatch.rawFile) {
-          pageImages = await convertPdfToImages(targetBatch.rawFile);
-        } else if (targetBatch.filename) {
-          const pdfUrl = targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
-            ? targetBatch.filename
-            : `/${targetBatch.filename}`;
-          try {
-            pageImages = await convertPdfToImages(pdfUrl);
-          } catch (urlErr) {
-            console.warn("Could not render directly from URL, opening file picker...", urlErr);
-            setIsProcessing(false);
-            const input = document.createElement("input");
-            input.type = "file";
-            input.accept = "application/pdf";
-            input.onchange = async (e: any) => {
-              const selectedFile = e.target?.files?.[0];
-              if (selectedFile) {
-                const imgs = await convertPdfToImages(selectedFile);
-                const updated = { ...targetBatch, rawFile: selectedFile, pageImages: imgs, pageCount: imgs.length };
-                handleRunOcrOnBatch(updated);
-              }
-            };
-            input.click();
-            return;
-          }
-        }
-      }
-
-      if (pageImages.length === 0) {
-        alert("Could not load PDF page images. Please re-upload the PDF file.");
-        return;
-      }
-
-      const yearStr = targetBatch.year || 2025;
-      const monthStr = String(targetBatch.month || 10).padStart(2, "0");
-      const parsedLedgers: DailyLedger[] = [];
-
-      // Parallel scanning in chunks of 5 pages — PAID API key has 2000 RPM
-      const CHUNK_SIZE = 5;
-      for (let i = 0; i < pageImages.length; i += CHUNK_SIZE) {
-        const chunk = pageImages.slice(i, i + CHUNK_SIZE);
-        const startPage = i + 1;
-        const endPage = Math.min(i + CHUNK_SIZE, pageImages.length);
-
-        setProgressText(`Scanning Pages ${startPage}–${endPage} of ${pageImages.length} with Gemini Vision OCR...`);
-
-        const chunkResults = await Promise.all(
-          chunk.map(async (imgUrl, chunkIdx) => {
-            const pageNum = i + chunkIdx + 1;
-            const defaultDate = `${yearStr}-${monthStr}-${String(pageNum).padStart(2, "0")}`;
-
-            try {
-              const extracted = await extractLedgerFromImage(imgUrl);
-              return {
-                day_number: pageNum,
-                date: extracted.meta?.date || defaultDate,
-                staff_name: extracted.meta?.staff || "Staff",
-                cp_balance: extracted.meta?.cp_balance || 0,
-                opening_balance: extracted.summary?.opening_balance || 0,
-                cash_in: extracted.summary?.cash_in || 0,
-                cash_out: extracted.summary?.cash_out || 0,
-                total_loan: extracted.summary?.total_loan || 0,
-                total_redeem: extracted.summary?.total_redeem || 0,
-                receive: extracted.summary?.receive || 0,
-                recovery: extracted.summary?.recovery || 0,
-                insurance: extracted.summary?.insurance || 0,
-                expenses: extracted.summary?.expenses || 0,
-                calculated_closing_balance: extracted.summary?.closing_balance || 0,
-                actual_cash_count: extracted.summary?.actual_cash_count || 0,
-                variance: extracted.summary?.variance || 0,
-                is_validated: false,
-                page_image_url: imgUrl,
-                transactions: extracted.transactions || []
-              } as DailyLedger;
-            } catch (ocrErr) {
-              console.error(`Page ${pageNum} OCR error:`, ocrErr);
-              throw new Error(`Page ${pageNum} failed to scan: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`);
-            }
-          })
-        );
-
-        parsedLedgers.push(...chunkResults);
-      }
-
-      const updatedBatch: BatchItem = {
-        ...targetBatch,
-        pageImages,
-        pageCount: parsedLedgers.length,
-        status: "Completed",
-        data: parsedLedgers
-      };
-
-      setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b)));
-      saveBatchToIndexedDb(updatedBatch);
-
-      // Auto save to Supabase Database
-      await saveBatchToSupabase({
-        branchName: updatedBatch.branchName,
-        year: updatedBatch.year,
-        month: updatedBatch.month,
-        bookCategory: updatedBatch.bookCategory,
-        batchName: updatedBatch.filename,
-        ledgers: parsedLedgers
-      }).catch((e) => console.error("Auto DB save warn:", e));
-
-      // Directly open SideBySideDashboard
-      setActiveBatch(updatedBatch);
-      setActiveLedgers(parsedLedgers);
-      setActiveDayIndex(0);
-    } catch (err) {
-      console.error(err);
-      alert(`OCR batch scan failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsProcessing(false);
-    }
+  // DIRECT OCR SCANNING: Re-queue the batch as Pending to be processed automatically in the background
+  const handleRunOcrOnBatch = (targetBatch: BatchItem) => {
+    setBatches((prev) =>
+      prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Pending", data: [] } : b))
+    );
   };
 
   const handleDeleteBatch = async (batchToDelete: BatchItem) => {
@@ -383,8 +410,8 @@ export const App: React.FC = () => {
           onBulkUploadPdfs={handleBulkUploadPdfs}
           onMoveBranchBatch={handleMoveBranchBatch}
           onRunOcrOnBatch={handleRunOcrOnBatch}
-          isProcessing={isProcessing}
-          progressText={progressText}
+          isProcessing={isProcessing || bgTask !== null}
+          progressText={bgTask ? bgTask.progressText : progressText}
         />
       ) : (
         <SideBySideDashboard

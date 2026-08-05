@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { BRANCH_LIST, MONTHS, YEARS } from "../constants/branches";
 import { BatchItem } from "./MainDashboard";
-import { Layers, RefreshCw, AlertTriangle, Building2, Calendar, ArrowRight, X, CheckCircle2, FileSpreadsheet } from "lucide-react";
+import { Layers, RefreshCw, Building2, Calendar, ArrowRight, X, CheckCircle2, FileSpreadsheet } from "lucide-react";
 import { exportBatchToExcel } from "../services/excelExportService";
 
 interface Props {
@@ -29,13 +29,19 @@ export const CompletionProgressMatrix: React.FC<Props> = ({ batches, _onCellClic
     );
 
     if (matchingBatches.length === 0) {
-      return { count: 0, hasWarning: false, batches: [] };
+      return { count: 0, status: null, batches: [] };
     }
 
     const maxDays = Math.max(...matchingBatches.map((b) => b.pageCount || 0));
-    const hasWarning = matchingBatches.some((b) => b.status === "Pending");
+    
+    let status: "Completed" | "Processing" | "Pending" = "Completed";
+    if (matchingBatches.some((b) => b.status === "Processing")) {
+      status = "Processing";
+    } else if (matchingBatches.some((b) => b.status === "Pending")) {
+      status = "Pending";
+    }
 
-    return { count: maxDays, hasWarning, batches: matchingBatches };
+    return { count: maxDays, status, batches: matchingBatches };
   };
 
   // Get all days data for a specific branch & month
@@ -154,15 +160,17 @@ export const CompletionProgressMatrix: React.FC<Props> = ({ batches, _onCellClic
                             <span className="w-7 h-7 rounded-full bg-slate-100 text-slate-400 font-semibold text-[11px] flex items-center justify-center border border-slate-200">
                               0
                             </span>
-                          ) : cell.count >= 28 ? (
+                          ) : cell.status === "Completed" ? (
                             <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center justify-center border border-emerald-300 gap-1 shadow-sm hover:scale-105 transition-transform">
                               {cell.count}
-                              {cell.hasWarning && <AlertTriangle className="h-3 w-3 text-amber-600" />}
+                            </span>
+                          ) : cell.status === "Processing" ? (
+                            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold text-xs flex items-center justify-center border border-amber-300 gap-1 shadow-sm hover:scale-105 transition-transform">
+                              {cell.count} <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse ml-1" />
                             </span>
                           ) : (
-                            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold text-xs flex items-center justify-center border border-amber-300 gap-1 shadow-sm hover:scale-105 transition-transform">
+                            <span className="px-2.5 py-1 rounded-full bg-red-100 text-red-800 font-bold text-xs flex items-center justify-center border border-red-300 gap-1 shadow-sm hover:scale-105 transition-transform">
                               {cell.count}
-                              {cell.hasWarning && <AlertTriangle className="h-3 w-3 text-amber-600" />}
                             </span>
                           )}
                         </div>
