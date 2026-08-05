@@ -476,18 +476,17 @@ export const MainDashboard: React.FC<Props> = ({
                                 </button>
                               )}
 
-                              {book.pdfUrl && (
-                                <button
-                                  onClick={() => {
-                                    setViewingPdfUrl(book.pdfUrl!);
-                                    setViewingPdfName(book.filename);
-                                  }}
-                                  className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl shadow-sm border border-indigo-200 transition-colors inline-flex items-center gap-1.5 shrink-0"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                  View PDF
-                                </button>
-                              )}
+                              <button
+                                onClick={() => {
+                                  const sourceUrl = book.pdfUrl || `/${book.filename}`;
+                                  setViewingPdfUrl(sourceUrl);
+                                  setViewingPdfName(book.filename);
+                                }}
+                                className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl shadow-sm border border-indigo-200 transition-colors inline-flex items-center gap-1.5 shrink-0"
+                              >
+                                <FileText className="h-4 w-4" />
+                                View PDF
+                              </button>
 
                               <button
                                 onClick={() => onSelectBatch(book)}
