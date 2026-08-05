@@ -279,3 +279,69 @@ export const fetchBatchesFromSupabase = async () => {
     return [];
   }
 };
+
+export const updateBatchBranchInSupabase = async (
+  batchId: string,
+  newBranchName: string,
+  filename: string,
+  year: number,
+  month: number,
+  bookCategory: BookCategory
+) => {
+  try {
+    // 1. Get or create new branch
+    let branchId = null;
+    const { data: branchData } = await supabase
+      .from("branches")
+      .select("id")
+      .eq("branch_name", newBranchName)
+      .maybeSingle();
+
+    if (branchData) {
+      branchId = branchData.id;
+    } else {
+      const { data: newBranch } = await supabase
+        .from("branches")
+        .insert({ branch_name: newBranchName })
+        .select("id")
+        .single();
+      if (newBranch) branchId = newBranch.id;
+    }
+
+    if (!branchId) {
+      throw new Error("Could not resolve new branch ID");
+    }
+
+    // 2. Check if batch exists by ID first
+    let targetDbBatchId = null;
+    if (batchId && batchId.includes("-") && !batchId.startsWith("batch-")) {
+      targetDbBatchId = batchId;
+    } else {
+      // Find matching batch in database
+      const { data: foundBatch } = await supabase
+        .from("ledger_batches")
+        .select("id")
+        .eq("original_pdf_url", filename)
+        .eq("year", year)
+        .eq("month", month)
+        .eq("book_category", bookCategory)
+        .maybeSingle();
+      if (foundBatch) {
+        targetDbBatchId = foundBatch.id;
+      }
+    }
+
+    if (targetDbBatchId) {
+      const { error } = await supabase
+        .from("ledger_batches")
+        .update({ branch_id: branchId })
+        .eq("id", targetDbBatchId);
+      if (error) throw error;
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error("Failed to update branch in Supabase DB:", err);
+    return { success: false, error: err };
+  }
+};

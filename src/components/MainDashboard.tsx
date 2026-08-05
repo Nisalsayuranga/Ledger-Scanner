@@ -403,11 +403,15 @@ export const MainDashboard: React.FC<Props> = ({
                               {movingBranchId === book.id ? (
                                 <select
                                   className="px-2 py-1 border rounded text-xs"
+                                  defaultValue=""
                                   onChange={(e) => {
-                                    onMoveBranchBatch(book.id, e.target.value as BranchName);
-                                    setMovingBranchId(null);
+                                    if (e.target.value) {
+                                      onMoveBranchBatch(book.id, e.target.value as BranchName);
+                                      setMovingBranchId(null);
+                                    }
                                   }}
                                 >
+                                  <option value="" disabled>Select Branch...</option>
                                   {BRANCH_LIST.map((b) => (
                                     <option key={b.name} value={b.name}>Move to {b.name}</option>
                                   ))}

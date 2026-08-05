@@ -5,7 +5,7 @@ import { UploadMetadata } from "./components/PdfUploader";
 import { convertPdfToImages } from "./services/pdfProcessor";
 import { extractLedgerFromImage } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
-import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase } from "./services/supabaseStorageService";
+import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase } from "./services/supabaseStorageService";
 import { getAllBatchesFromIndexedDb, saveBatchToIndexedDb, saveAllBatchesToIndexedDb, deleteBatchFromIndexedDb } from "./services/indexedDbStorage";
 import { detectBranchAndCategoryFromFilename } from "./utils/filenameDetector";
 import { DailyLedger } from "./types/ledger";
@@ -360,9 +360,26 @@ export const App: React.FC = () => {
   };
 
   const handleMoveBranchBatch = (batchId: string, newBranch: BranchName) => {
+    // 1. Update React local state
     setBatches((prev) =>
       prev.map((b) => (b.id === batchId ? { ...b, branchName: newBranch } : b))
     );
+
+    // 2. Locate target batch and save changes to DBs
+    const targetBatch = batches.find((b) => b.id === batchId);
+    if (targetBatch) {
+      updateBatchBranchInSupabase(
+        batchId,
+        newBranch,
+        targetBatch.filename,
+        targetBatch.year,
+        targetBatch.month,
+        targetBatch.bookCategory
+      ).catch((e) => console.error("Error updating branch in Supabase:", e));
+
+      const updatedBatch = { ...targetBatch, branchName: newBranch };
+      saveBatchToIndexedDb(updatedBatch).catch((e) => console.error("Error saving moved batch to IndexedDB:", e));
+    }
   };
 
   // DIRECT OCR SCANNING: Re-queue the batch as Pending to be processed automatically in the background

@@ -14,7 +14,15 @@ export const detectBranchAndCategoryFromFilename = (filename: string): {
   for (const branch of BRANCH_LIST) {
     const bNameUpper = branch.name.toUpperCase();
     const bCodeUpper = branch.code.toUpperCase();
-    if (upper.includes(bNameUpper) || upper.includes(` ${bCodeUpper} `) || upper.includes(`_${bCodeUpper}_`)) {
+    
+    const nameRegex = new RegExp(`\\b${bNameUpper.replace(/\s+/g, '\\s+')}\\b`);
+    const codeRegex = new RegExp(`\\b${bCodeUpper}\\b`);
+
+    if (
+      nameRegex.test(upper) ||
+      codeRegex.test(upper) ||
+      (branch.name === "Borella" && upper.includes("BORALLA"))
+    ) {
       detectedBranch = branch.name as BranchName;
       break;
     }
