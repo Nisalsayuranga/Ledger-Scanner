@@ -132,5 +132,7 @@ CREATE POLICY "Allow public delete on ledger_transactions" ON ledger_transaction
 -- 6. STORAGE POLICIES (Allows client-side uploads/downloads using anon API key)
 CREATE POLICY "Allow public select on ledger-documents" ON storage.objects FOR SELECT USING (bucket_id = 'ledger-documents');
 CREATE POLICY "Allow public insert on ledger-documents" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'ledger-documents');
+CREATE POLICY "Allow public update on ledger-documents" ON storage.objects FOR UPDATE USING (bucket_id = 'ledger-documents') WITH CHECK (bucket_id = 'ledger-documents');
 CREATE POLICY "Allow public delete on ledger-documents" ON storage.objects FOR DELETE USING (bucket_id = 'ledger-documents');
+
 
