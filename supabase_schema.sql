@@ -112,22 +112,22 @@ CREATE POLICY "Allow public read on ledger_batches" ON ledger_batches FOR SELECT
 CREATE POLICY "Allow public read on daily_ledgers" ON daily_ledgers FOR SELECT USING (true);
 CREATE POLICY "Allow public read on ledger_transactions" ON ledger_transactions FOR SELECT USING (true);
 
--- INSERT/UPDATE/DELETE Policies: Scoped to authenticated users only (prevents unauthorized client mutation)
-CREATE POLICY "Allow auth insert on branches" ON branches FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth update on branches" ON branches FOR UPDATE USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth delete on branches" ON branches FOR DELETE USING (auth.role() = 'authenticated');
+-- INSERT/UPDATE/DELETE Policies: Scoped to public (necessary for anonymous client mutations)
+CREATE POLICY "Allow public insert on branches" ON branches FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update on branches" ON branches FOR UPDATE USING (true);
+CREATE POLICY "Allow public delete on branches" ON branches FOR DELETE USING (true);
 
-CREATE POLICY "Allow auth insert on ledger_batches" ON ledger_batches FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth update on ledger_batches" ON ledger_batches FOR UPDATE USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth delete on ledger_batches" ON ledger_batches FOR DELETE USING (auth.role() = 'authenticated');
+CREATE POLICY "Allow public insert on ledger_batches" ON ledger_batches FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update on ledger_batches" ON ledger_batches FOR UPDATE USING (true);
+CREATE POLICY "Allow public delete on ledger_batches" ON ledger_batches FOR DELETE USING (true);
 
-CREATE POLICY "Allow auth insert on daily_ledgers" ON daily_ledgers FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth update on daily_ledgers" ON daily_ledgers FOR UPDATE USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth delete on daily_ledgers" ON daily_ledgers FOR DELETE USING (auth.role() = 'authenticated');
+CREATE POLICY "Allow public insert on daily_ledgers" ON daily_ledgers FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update on daily_ledgers" ON daily_ledgers FOR UPDATE USING (true);
+CREATE POLICY "Allow public delete on daily_ledgers" ON daily_ledgers FOR DELETE USING (true);
 
-CREATE POLICY "Allow auth insert on ledger_transactions" ON ledger_transactions FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth update on ledger_transactions" ON ledger_transactions FOR UPDATE USING (auth.role() = 'authenticated');
-CREATE POLICY "Allow auth delete on ledger_transactions" ON ledger_transactions FOR DELETE USING (auth.role() = 'authenticated');
+CREATE POLICY "Allow public insert on ledger_transactions" ON ledger_transactions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update on ledger_transactions" ON ledger_transactions FOR UPDATE USING (true);
+CREATE POLICY "Allow public delete on ledger_transactions" ON ledger_transactions FOR DELETE USING (true);
 
 -- 6. STORAGE POLICIES (Allows client-side uploads/downloads using anon API key)
 CREATE POLICY "Allow public select on ledger-documents" ON storage.objects FOR SELECT USING (bucket_id = 'ledger-documents');
