@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build Output
+dist/
+build/
+
+# Local Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.local
+
+# Dev Test Scripts & Logs
+test_*.js
+run_*.js
+list_*.js
+build_*.js
+*.log
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Data and Temp files
+*.pdf
+*.xlsx
+*_extracted.json
