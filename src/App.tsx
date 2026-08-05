@@ -445,6 +445,7 @@ export const App: React.FC = () => {
 
     setIsMigrating(true);
     let successCount = 0;
+    const errors: string[] = [];
 
     for (let idx = 0; idx < files.length; idx++) {
       const file = files[idx];
@@ -471,7 +472,9 @@ export const App: React.FC = () => {
       });
 
       if (!matchedBatch) {
-        console.warn(`No matching batch found for file: ${file.name}`, detected);
+        const errMsg = `No matching archive found for "${file.name}" (Detected Branch: ${detected.branchName}, Month: ${detected.month}, Year: ${detected.year}, Category: ${detected.bookCategory})`;
+        console.warn(errMsg);
+        errors.push(errMsg);
         continue;
       }
 
@@ -505,14 +508,20 @@ export const App: React.FC = () => {
           prev.map((b) => (b.id === matchedBatch.id ? { ...b, pdfUrl: cloudUrl } : b))
         );
         successCount++;
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Migration error for ${file.name}:`, err);
+        errors.push(`${file.name}: ${err.message || String(err)}`);
       }
     }
 
     setIsMigrating(false);
     setMigrationProgress("");
-    alert(`Successfully uploaded and linked ${successCount} out of ${files.length} PDF files to Supabase Storage!`);
+    
+    if (errors.length > 0) {
+      alert(`Uploaded and linked ${successCount} out of ${files.length} PDF files.\n\nErrors encountered:\n${errors.join("\n")}`);
+    } else {
+      alert(`Successfully uploaded and linked ${successCount} out of ${files.length} PDF files to Supabase Storage!`);
+    }
   };
 
 
