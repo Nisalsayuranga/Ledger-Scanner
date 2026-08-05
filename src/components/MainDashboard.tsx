@@ -39,6 +39,7 @@ interface Props {
   onMigrateBatches?: () => Promise<void>;
   isMigrating?: boolean;
   migrationProgress?: string;
+  onLinkPdfToBatch?: (batchId: string, file: File) => Promise<void>;
 }
 
 export const MainDashboard: React.FC<Props> = ({
@@ -56,6 +57,7 @@ export const MainDashboard: React.FC<Props> = ({
   onMigrateBatches,
   isMigrating = false,
   migrationProgress = "",
+  onLinkPdfToBatch,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("archive");
   const [selectedBookTab, setSelectedBookTab] = useState<BookCategory>("lr_book");
@@ -466,6 +468,24 @@ export const MainDashboard: React.FC<Props> = ({
                                 >
                                   <ArrowRightLeft className="h-4 w-4" />
                                 </button>
+                              )}
+
+                              {!book.pdfUrl && onLinkPdfToBatch && (
+                                <label className="cursor-pointer px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow transition-colors inline-flex items-center gap-1.5 shrink-0">
+                                  <Upload className="h-3.5 w-3.5" />
+                                  Link PDF
+                                  <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    className="hidden"
+                                    onChange={async (e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) {
+                                        await onLinkPdfToBatch(book.id, file);
+                                      }
+                                    }}
+                                  />
+                                </label>
                               )}
 
                               <button

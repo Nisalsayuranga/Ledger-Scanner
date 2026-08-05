@@ -500,6 +500,53 @@ export const App: React.FC = () => {
     alert(`Successfully migrated ${successCount} out of ${toMigrate.length} PDF files to Supabase Storage!`);
   };
 
+  const handleLinkPdfToBatch = async (batchId: string, file: File) => {
+    try {
+      setIsProcessing(true);
+      setProgressText(`Uploading ${file.name} to Supabase Storage...`);
+
+      const targetBatch = batches.find((b) => b.id === batchId);
+      if (!targetBatch) {
+        throw new Error("Batch not found in local state");
+      }
+
+      // 1. Upload to Supabase Storage
+      const cloudUrl = await uploadPdfToSupabase(
+        file,
+        targetBatch.branchName,
+        targetBatch.year,
+        targetBatch.month,
+        targetBatch.bookCategory
+      );
+
+      // 2. Update database entry
+      await updateBatchPdfUrlInSupabase(
+        batchId,
+        cloudUrl,
+        targetBatch.filename,
+        targetBatch.year,
+        targetBatch.month,
+        targetBatch.bookCategory
+      );
+
+      // 3. Update local IndexedDB
+      const updatedBatch = { ...targetBatch, pdfUrl: cloudUrl };
+      await saveBatchToIndexedDb(updatedBatch);
+
+      // 4. Update React state
+      setBatches((prev) =>
+        prev.map((b) => (b.id === batchId ? { ...b, pdfUrl: cloudUrl } : b))
+      );
+
+      alert(`Successfully linked and uploaded PDF for ${targetBatch.branchName}!`);
+    } catch (err) {
+      console.error("Failed to link PDF to batch:", err);
+      alert(`Failed to link PDF: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
       {activeBatch === null ? (
@@ -518,6 +565,7 @@ export const App: React.FC = () => {
           onMigrateBatches={handleMigrateBatches}
           isMigrating={isMigrating}
           migrationProgress={migrationProgress}
+          onLinkPdfToBatch={handleLinkPdfToBatch}
         />
       ) : (
         <SideBySideDashboard
