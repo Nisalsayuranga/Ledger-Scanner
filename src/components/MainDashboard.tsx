@@ -34,6 +34,7 @@ interface Props {
   onRunOcrOnBatch: (batch: BatchItem) => void;
   isProcessing: boolean;
   progressText: string;
+  bgTask?: any;
 }
 
 export const MainDashboard: React.FC<Props> = ({
@@ -47,6 +48,7 @@ export const MainDashboard: React.FC<Props> = ({
   onRunOcrOnBatch,
   isProcessing,
   progressText,
+  bgTask = null,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("archive");
   const [selectedBookTab, setSelectedBookTab] = useState<BookCategory>("lr_book");
@@ -77,6 +79,7 @@ export const MainDashboard: React.FC<Props> = ({
         totalBatchesCount={batches.length}
         isProcessing={isProcessing}
         progressText={progressText}
+        bgTask={bgTask}
       />
 
       {/* Main Content Area */}

@@ -410,8 +410,9 @@ export const App: React.FC = () => {
           onBulkUploadPdfs={handleBulkUploadPdfs}
           onMoveBranchBatch={handleMoveBranchBatch}
           onRunOcrOnBatch={handleRunOcrOnBatch}
-          isProcessing={isProcessing || bgTask !== null}
-          progressText={bgTask ? bgTask.progressText : progressText}
+          isProcessing={isProcessing}
+          progressText={progressText}
+          bgTask={bgTask}
         />
       ) : (
         <SideBySideDashboard

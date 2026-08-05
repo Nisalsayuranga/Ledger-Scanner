@@ -3,12 +3,21 @@ import { LayoutDashboard, Grid, FolderArchive, Upload, Database, Layers, Buildin
 
 export type ActiveTab = "overview" | "matrix" | "archive" | "upload" | "supabase";
 
+export interface BgTask {
+  id: string;
+  filename: string;
+  progress: number;
+  total: number;
+  progressText: string;
+}
+
 interface Props {
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
   totalBatchesCount: number;
   isProcessing?: boolean;
   progressText?: string;
+  bgTask?: BgTask | null;
 }
 
 export const Sidebar: React.FC<Props> = ({
@@ -16,7 +25,8 @@ export const Sidebar: React.FC<Props> = ({
   onTabChange,
   totalBatchesCount,
   isProcessing = false,
-  progressText = ""
+  progressText = "",
+  bgTask = null
 }) => {
   const menuItems = [
     {
@@ -110,16 +120,48 @@ export const Sidebar: React.FC<Props> = ({
         })}
       </nav>
 
+      {/* Background OCR Progress Card */}
+      {bgTask && (
+        <div className="mx-4 mb-3 p-3 bg-slate-950 rounded-xl border border-amber-500/30 space-y-2.5 shadow-lg animate-in fade-in">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate" title={bgTask.filename}>
+              {bgTask.filename}
+            </span>
+            <div className="flex items-center justify-between text-[11px] font-bold text-slate-100 mt-0.5">
+              <span className="flex items-center gap-1.5">
+                <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                OCR Scan Running
+              </span>
+              <span className="text-[10px] bg-amber-950/80 text-amber-300 font-bold px-1.5 py-0.5 rounded border border-amber-800">
+                {Math.round((bgTask.progress / bgTask.total) * 100)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Dynamic Progress Line Bar */}
+          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700 relative">
+            <div 
+              className="bg-amber-500 h-full rounded-full transition-all duration-500" 
+              style={{ width: `${Math.max(5, Math.min(100, (bgTask.progress / bgTask.total) * 100))}%` }} 
+            />
+          </div>
+
+          <p className="text-[10px] text-slate-300 font-semibold truncate" title={bgTask.progressText}>
+            {bgTask.progressText}
+          </p>
+        </div>
+      )}
+
       {/* Live Batch Upload & Processing Progress Line Bar Card */}
       {isProcessing && (
         <div className="mx-4 mb-3 p-3 bg-[#0f172a] rounded-xl border border-blue-500/30 space-y-2.5 shadow-lg animate-in fade-in">
           <div className="flex items-center justify-between text-xs font-bold text-slate-100">
             <span className="flex items-center gap-2">
               <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-400" />
-              Batch Processing...
+              Batch Uploading...
             </span>
             <span className="text-[10px] bg-blue-950 text-blue-300 font-mono px-2 py-0.5 rounded border border-blue-800">
-              Processing
+              Uploading
             </span>
           </div>
 
