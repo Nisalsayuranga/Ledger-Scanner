@@ -36,6 +36,9 @@ interface Props {
   isProcessing: boolean;
   progressText: string;
   bgTask?: any;
+  onMigrateBatches?: () => Promise<void>;
+  isMigrating?: boolean;
+  migrationProgress?: string;
 }
 
 export const MainDashboard: React.FC<Props> = ({
@@ -50,6 +53,9 @@ export const MainDashboard: React.FC<Props> = ({
   isProcessing,
   progressText,
   bgTask = null,
+  onMigrateBatches,
+  isMigrating = false,
+  migrationProgress = "",
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("archive");
   const [selectedBookTab, setSelectedBookTab] = useState<BookCategory>("lr_book");
@@ -215,6 +221,41 @@ export const MainDashboard: React.FC<Props> = ({
           {/* TAB 3: LEDGER ARCHIVES - BRANCH BOXES & MONTH BOX CONTAINER REPOSITORY */}
           {activeTab === "archive" && (
             <div className="space-y-6">
+              {/* Cloud Migration Banner */}
+              {batches.filter((b) => !b.pdfUrl).length > 0 && onMigrateBatches && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 bg-amber-100 rounded-lg text-amber-700 mt-0.5">
+                      <FolderArchive className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-amber-800">Cloud Storage Migration Available</h4>
+                      <p className="text-xs text-amber-600 mt-1">
+                        You have **{batches.filter((b) => !b.pdfUrl).length}** previously uploaded ledger batches that are not backed up on Supabase Storage.
+                        Click below to automatically upload them from your local project public folder to the cloud.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={onMigrateBatches}
+                    disabled={isMigrating}
+                    className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-extrabold text-xs rounded-xl shadow transition-colors shrink-0 inline-flex items-center gap-1.5"
+                  >
+                    {isMigrating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        {migrationProgress || "Migrating..."}
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="h-4 w-4" />
+                        Migrate {batches.filter((b) => !b.pdfUrl).length} PDFs to Cloud
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {/* Primary Book Type Navigation Bar (L/R Books vs M Books) */}
               <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                 <div className="flex gap-2">

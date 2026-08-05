@@ -5,7 +5,7 @@ import { UploadMetadata } from "./components/PdfUploader";
 import { convertPdfToImages } from "./services/pdfProcessor";
 import { extractLedgerFromImage } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
-import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase, uploadPdfToSupabase } from "./services/supabaseStorageService";
+import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase, uploadPdfToSupabase, updateBatchPdfUrlInSupabase } from "./services/supabaseStorageService";
 import { getAllBatchesFromIndexedDb, saveBatchToIndexedDb, saveAllBatchesToIndexedDb, deleteBatchFromIndexedDb } from "./services/indexedDbStorage";
 import { detectBranchAndCategoryFromFilename } from "./utils/filenameDetector";
 import { DailyLedger } from "./types/ledger";
@@ -22,6 +22,8 @@ export const App: React.FC = () => {
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressText, setProgressText] = useState("");
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState("");
 
   const [bgTask, setBgTask] = useState<{
     id: string;
@@ -438,6 +440,66 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleMigrateBatches = async () => {
+    const toMigrate = batches.filter((b) => !b.pdfUrl);
+    if (toMigrate.length === 0) return;
+
+    setIsMigrating(true);
+    let successCount = 0;
+
+    for (let idx = 0; idx < toMigrate.length; idx++) {
+      const batch = toMigrate[idx];
+      setMigrationProgress(`Migrating ${batch.branchName} (${idx + 1}/${toMigrate.length})...`);
+
+      try {
+        // Fetch local file
+        const res = await fetch(`/${batch.filename}`);
+        if (!res.ok) {
+          console.warn(`Could not fetch local file for ${batch.filename}: ${res.statusText}`);
+          continue;
+        }
+
+        const blob = await res.blob();
+        const file = new File([blob], batch.filename, { type: "application/pdf" });
+
+        // Upload to storage
+        const cloudUrl = await uploadPdfToSupabase(
+          file,
+          batch.branchName,
+          batch.year,
+          batch.month,
+          batch.bookCategory
+        );
+
+        // Update database
+        await updateBatchPdfUrlInSupabase(
+          batch.id,
+          cloudUrl,
+          batch.filename,
+          batch.year,
+          batch.month,
+          batch.bookCategory
+        );
+
+        // Update local IndexedDB
+        const updatedBatch = { ...batch, pdfUrl: cloudUrl };
+        await saveBatchToIndexedDb(updatedBatch);
+
+        // Update state
+        setBatches((prev) =>
+          prev.map((b) => (b.id === batch.id ? { ...b, pdfUrl: cloudUrl } : b))
+        );
+        successCount++;
+      } catch (err) {
+        console.error(`Migration error for ${batch.filename}:`, err);
+      }
+    }
+
+    setIsMigrating(false);
+    setMigrationProgress("");
+    alert(`Successfully migrated ${successCount} out of ${toMigrate.length} PDF files to Supabase Storage!`);
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
       {activeBatch === null ? (
@@ -453,6 +515,9 @@ export const App: React.FC = () => {
           isProcessing={isProcessing}
           progressText={progressText}
           bgTask={bgTask}
+          onMigrateBatches={handleMigrateBatches}
+          isMigrating={isMigrating}
+          migrationProgress={migrationProgress}
         />
       ) : (
         <SideBySideDashboard

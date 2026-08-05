@@ -423,3 +423,45 @@ export const updateBatchBranchInSupabase = async (
     return { success: false, error: err };
   }
 };
+
+export const updateBatchPdfUrlInSupabase = async (
+  batchId: string,
+  newPdfUrl: string,
+  filename: string,
+  year: number,
+  month: number,
+  bookCategory: BookCategory
+) => {
+  try {
+    let targetDbBatchId = null;
+    if (batchId && batchId.includes("-") && !batchId.startsWith("batch-")) {
+      targetDbBatchId = batchId;
+    } else {
+      // Find matching batch in database
+      const { data: foundBatch } = await supabase
+        .from("ledger_batches")
+        .select("id")
+        .eq("original_pdf_url", filename)
+        .eq("year", year)
+        .eq("month", month)
+        .eq("book_category", bookCategory)
+        .maybeSingle();
+      if (foundBatch) {
+        targetDbBatchId = foundBatch.id;
+      }
+    }
+
+    if (targetDbBatchId) {
+      const { error } = await supabase
+        .from("ledger_batches")
+        .update({ original_pdf_url: newPdfUrl })
+        .eq("id", targetDbBatchId);
+      if (error) throw error;
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error("Failed to update original_pdf_url in Supabase DB:", err);
+    return { success: false, error: err };
+  }
+};
