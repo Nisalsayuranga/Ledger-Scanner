@@ -36,7 +36,7 @@ interface Props {
   isProcessing: boolean;
   progressText: string;
   bgTask?: any;
-  onMigrateBatches?: () => Promise<void>;
+  onMigrateBatches?: (files: File[]) => Promise<void>;
   isMigrating?: boolean;
   migrationProgress?: string;
   onLinkPdfToBatch?: (batchId: string, file: File) => Promise<void>;
@@ -234,27 +234,33 @@ export const MainDashboard: React.FC<Props> = ({
                       <h4 className="text-sm font-bold text-amber-800">Cloud Storage Migration Available</h4>
                       <p className="text-xs text-amber-600 mt-1">
                         You have **{batches.filter((b) => !b.pdfUrl).length}** previously uploaded ledger batches that are not backed up on Supabase Storage.
-                        Click below to automatically upload them from your local project public folder to the cloud.
+                        Select the PDF files from your computer to upload and link them to their respective archives automatically.
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={onMigrateBatches}
-                    disabled={isMigrating}
-                    className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-extrabold text-xs rounded-xl shadow transition-colors shrink-0 inline-flex items-center gap-1.5"
-                  >
-                    {isMigrating ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        {migrationProgress || "Migrating..."}
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="h-4 w-4" />
-                        Migrate {batches.filter((b) => !b.pdfUrl).length} PDFs to Cloud
-                      </>
-                    )}
-                  </button>
+                  {isMigrating ? (
+                    <div className="px-4 py-2.5 bg-amber-200 text-amber-800 font-extrabold text-xs rounded-xl shadow shrink-0 flex items-center gap-1.5">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      {migrationProgress || "Migrating..."}
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded-xl shadow transition-colors shrink-0 inline-flex items-center gap-1.5">
+                      <Upload className="h-4 w-4" />
+                      Upload &amp; Link PDFs
+                      <input
+                        type="file"
+                        multiple
+                        accept="application/pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          if (files && files.length > 0) {
+                            onMigrateBatches(Array.from(files));
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
                 </div>
               )}
 

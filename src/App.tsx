@@ -440,64 +440,66 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleMigrateBatches = async () => {
-    const toMigrate = batches.filter((b) => !b.pdfUrl);
-    if (toMigrate.length === 0) return;
+  const handleMigrateBatches = async (files?: File[]) => {
+    if (!files || files.length === 0) return;
 
     setIsMigrating(true);
     let successCount = 0;
 
-    for (let idx = 0; idx < toMigrate.length; idx++) {
-      const batch = toMigrate[idx];
-      setMigrationProgress(`Migrating ${batch.branchName} (${idx + 1}/${toMigrate.length})...`);
+    for (let idx = 0; idx < files.length; idx++) {
+      const file = files[idx];
+      setMigrationProgress(`Uploading ${file.name} (${idx + 1}/${files.length})...`);
+
+      // Match selected file with existing batch by filename (case-insensitive, ignoring spacing/underscores)
+      const cleanFileName = file.name.toLowerCase().replace(/[\s_-]+/g, "");
+      const matchedBatch = batches.find((b) => {
+        if (b.pdfUrl) return false; // Already has cloud backup
+        const bCleanName = b.filename.toLowerCase().replace(/[\s_-]+/g, "");
+        return bCleanName === cleanFileName || bCleanName.includes(cleanFileName) || cleanFileName.includes(bCleanName);
+      });
+
+      if (!matchedBatch) {
+        console.warn(`No matching batch found for file: ${file.name}`);
+        continue;
+      }
 
       try {
-        // Fetch local file
-        const res = await fetch(`/${batch.filename}`);
-        if (!res.ok) {
-          console.warn(`Could not fetch local file for ${batch.filename}: ${res.statusText}`);
-          continue;
-        }
-
-        const blob = await res.blob();
-        const file = new File([blob], batch.filename, { type: "application/pdf" });
-
         // Upload to storage
         const cloudUrl = await uploadPdfToSupabase(
           file,
-          batch.branchName,
-          batch.year,
-          batch.month,
-          batch.bookCategory
+          matchedBatch.branchName,
+          matchedBatch.year,
+          matchedBatch.month,
+          matchedBatch.bookCategory
         );
 
         // Update database
         await updateBatchPdfUrlInSupabase(
-          batch.id,
+          matchedBatch.id,
           cloudUrl,
-          batch.filename,
-          batch.year,
-          batch.month,
-          batch.bookCategory
+          matchedBatch.filename,
+          matchedBatch.year,
+          matchedBatch.month,
+          matchedBatch.bookCategory
         );
 
         // Update local IndexedDB
-        const updatedBatch = { ...batch, pdfUrl: cloudUrl };
+        const updatedBatch = { ...matchedBatch, pdfUrl: cloudUrl };
         await saveBatchToIndexedDb(updatedBatch);
 
         // Update state
         setBatches((prev) =>
-          prev.map((b) => (b.id === batch.id ? { ...b, pdfUrl: cloudUrl } : b))
+          prev.map((b) => (b.id === matchedBatch.id ? { ...b, pdfUrl: cloudUrl } : b))
         );
         successCount++;
       } catch (err) {
-        console.error(`Migration error for ${batch.filename}:`, err);
+        console.error(`Migration error for ${file.name}:`, err);
       }
     }
 
     setIsMigrating(false);
     setMigrationProgress("");
-    alert(`Successfully migrated ${successCount} out of ${toMigrate.length} PDF files to Supabase Storage!`);
+    alert(`Successfully uploaded and linked ${successCount} out of ${files.length} PDF files to Supabase Storage!`);
   };
 
   const handleLinkPdfToBatch = async (batchId: string, file: File) => {
