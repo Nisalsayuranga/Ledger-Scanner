@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { FileText, FileSpreadsheet, CheckCircle2, Layers, Calendar, ArrowRight, Upload, Building2, BookOpen, ArrowLeft, Plus, Zap, ArrowRightLeft, FolderArchive, Loader2, Trash2 } from "lucide-react";
+import { FileText, FileSpreadsheet, CheckCircle2, Layers, Calendar, ArrowRight, Upload, Building2, BookOpen, ArrowLeft, Plus, Zap, ArrowRightLeft, FolderArchive, Loader2, Trash2, X } from "lucide-react";
 import { Sidebar, ActiveTab } from "./Sidebar";
 import { PdfUploader, UploadMetadata } from "./PdfUploader";
 import { BulkPdfUploader } from "./BulkPdfUploader";
@@ -39,7 +39,6 @@ interface Props {
   onMigrateBatches?: (files: File[]) => Promise<void>;
   isMigrating?: boolean;
   migrationProgress?: string;
-  onLinkPdfToBatch?: (batchId: string, file: File) => Promise<void>;
 }
 
 export const MainDashboard: React.FC<Props> = ({
@@ -57,7 +56,6 @@ export const MainDashboard: React.FC<Props> = ({
   onMigrateBatches,
   isMigrating = false,
   migrationProgress = "",
-  onLinkPdfToBatch,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>("archive");
   const [selectedBookTab, setSelectedBookTab] = useState<BookCategory>("lr_book");
@@ -71,6 +69,8 @@ export const MainDashboard: React.FC<Props> = ({
 
   // Moving branch dropdown state per batch ID
   const [movingBranchId, setMovingBranchId] = useState<string | null>(null);
+  const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
+  const [viewingPdfName, setViewingPdfName] = useState<string>("");
 
   const totalDays = batches.reduce((acc, b) => acc + (b.pageCount || 0), 0);
 
@@ -476,22 +476,17 @@ export const MainDashboard: React.FC<Props> = ({
                                 </button>
                               )}
 
-                              {!book.pdfUrl && onLinkPdfToBatch && (
-                                <label className="cursor-pointer px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow transition-colors inline-flex items-center gap-1.5 shrink-0">
-                                  <Upload className="h-3.5 w-3.5" />
-                                  Link PDF
-                                  <input
-                                    type="file"
-                                    accept="application/pdf"
-                                    className="hidden"
-                                    onChange={async (e) => {
-                                      const file = e.target.files?.[0];
-                                      if (file) {
-                                        await onLinkPdfToBatch(book.id, file);
-                                      }
-                                    }}
-                                  />
-                                </label>
+                              {book.pdfUrl && (
+                                <button
+                                  onClick={() => {
+                                    setViewingPdfUrl(book.pdfUrl!);
+                                    setViewingPdfName(book.filename);
+                                  }}
+                                  className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl shadow-sm border border-indigo-200 transition-colors inline-flex items-center gap-1.5 shrink-0"
+                                >
+                                  <FileText className="h-4 w-4" />
+                                  View PDF
+                                </button>
                               )}
 
                               <button
@@ -628,6 +623,37 @@ export const MainDashboard: React.FC<Props> = ({
               {progressText || "Analyzing document pages..."}
             </div>
             <p className="text-[11px] text-slate-400">Please do not close or refresh the window.</p>
+          </div>
+        </div>
+      )}
+
+      {/* PDF View Popup Modal */}
+      {viewingPdfUrl && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-5xl h-[90vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-blue-400" />
+                <h3 className="text-sm font-bold truncate max-w-xl text-white">{viewingPdfName}</h3>
+              </div>
+              <button
+                onClick={() => setViewingPdfUrl(null)}
+                className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"
+                title="Close Viewer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Modal Body */}
+            <div className="flex-1 bg-slate-100 p-2">
+              <iframe
+                src={viewingPdfUrl}
+                className="w-full h-full rounded-xl border border-slate-200 bg-white"
+                title="PDF Viewer"
+              />
+            </div>
           </div>
         </div>
       )}
