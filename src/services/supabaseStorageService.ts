@@ -430,14 +430,40 @@ export const updateBatchPdfUrlInSupabase = async (
   filename: string,
   year: number,
   month: number,
-  bookCategory: BookCategory
+  bookCategory: BookCategory,
+  branchName?: string
 ) => {
   try {
     let targetDbBatchId = null;
     if (batchId && batchId.includes("-") && !batchId.startsWith("batch-")) {
       targetDbBatchId = batchId;
-    } else {
-      // Find matching batch in database
+    }
+
+    if (!targetDbBatchId && branchName) {
+      // Find branch ID
+      const { data: branchData } = await supabase
+        .from("branches")
+        .select("id")
+        .eq("branch_name", branchName)
+        .maybeSingle();
+
+      if (branchData) {
+        const { data: foundBatch } = await supabase
+          .from("ledger_batches")
+          .select("id")
+          .eq("branch_id", branchData.id)
+          .eq("year", year)
+          .eq("month", month)
+          .eq("book_category", bookCategory)
+          .maybeSingle();
+        if (foundBatch) {
+          targetDbBatchId = foundBatch.id;
+        }
+      }
+    }
+
+    if (!targetDbBatchId) {
+      // Fallback: Find matching batch in database by original_pdf_url
       const { data: foundBatch } = await supabase
         .from("ledger_batches")
         .select("id")

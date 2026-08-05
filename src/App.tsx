@@ -450,16 +450,28 @@ export const App: React.FC = () => {
       const file = files[idx];
       setMigrationProgress(`Uploading ${file.name} (${idx + 1}/${files.length})...`);
 
-      // Match selected file with existing batch by filename (case-insensitive, ignoring spacing/underscores)
+      // Match selected file with existing batch by clean filename OR metadata fallback
+      const detected = detectBranchAndCategoryFromFilename(file.name);
       const cleanFileName = file.name.toLowerCase().replace(/[\s_-]+/g, "");
+      
       const matchedBatch = batches.find((b) => {
-        if (b.pdfUrl) return false; // Already has cloud backup
+        // 1. Check clean filename match
         const bCleanName = b.filename.toLowerCase().replace(/[\s_-]+/g, "");
-        return bCleanName === cleanFileName || bCleanName.includes(cleanFileName) || cleanFileName.includes(bCleanName);
+        if (bCleanName === cleanFileName || bCleanName.includes(cleanFileName) || cleanFileName.includes(bCleanName)) {
+          return true;
+        }
+
+        // 2. Check metadata match fallback
+        return (
+          b.branchName === detected.branchName &&
+          b.year === detected.year &&
+          b.month === detected.month &&
+          b.bookCategory === detected.bookCategory
+        );
       });
 
       if (!matchedBatch) {
-        console.warn(`No matching batch found for file: ${file.name}`);
+        console.warn(`No matching batch found for file: ${file.name}`, detected);
         continue;
       }
 
@@ -480,7 +492,8 @@ export const App: React.FC = () => {
           matchedBatch.filename,
           matchedBatch.year,
           matchedBatch.month,
-          matchedBatch.bookCategory
+          matchedBatch.bookCategory,
+          matchedBatch.branchName
         );
 
         // Update local IndexedDB
