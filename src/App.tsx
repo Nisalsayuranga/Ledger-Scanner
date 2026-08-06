@@ -33,6 +33,15 @@ export const App: React.FC = () => {
     progressText: string;
   } | null>(null);
 
+  const [ocrError, setOcrError] = useState<{
+    batchId: string;
+    filename: string;
+    message: string;
+  } | null>(null);
+  
+  const [reuploadBatchId, setReuploadBatchId] = useState<string | null>(null);
+  const reuploadInputRef = React.useRef<HTMLInputElement>(null);
+
   // Restore batches from IndexedDB + Supabase DB on app mount
   useEffect(() => {
     let isMounted = true;
@@ -199,7 +208,11 @@ export const App: React.FC = () => {
         setBatches((prev) =>
           prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Pending" } : b))
         );
-        alert(`Background OCR failed for ${targetBatch.filename}: ${err?.message || String(err)}`);
+        setOcrError({
+          batchId: targetBatch.id,
+          filename: targetBatch.filename,
+          message: err?.message || String(err)
+        });
       } finally {
         setBgTask(null);
       }
@@ -442,9 +455,51 @@ export const App: React.FC = () => {
         prev.map((b) => (b.id === updatedBatch.id ? { ...b, status: "Pending", data: [] } : b))
       );
     } catch (e: any) {
-      alert("Failed to load PDF for OCR: " + e.message);
+      setOcrError({ filename: targetBatch.filename, message: e.message });
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleReuploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !reuploadBatchId) return;
+    
+    const targetBatch = batches.find(b => b.id === reuploadBatchId);
+    if (!targetBatch) return;
+
+    setIsProcessing(true);
+    setProgressText(`Re-uploading ${file.name} to Cloud Storage...`);
+
+    try {
+      const pageCount = await getPdfPageCount(file);
+      const cloudUrl = await uploadPdfToSupabase(
+        file,
+        targetBatch.branchName,
+        targetBatch.year,
+        targetBatch.month,
+        targetBatch.bookCategory
+      );
+
+      const updatedBatch: BatchItem = {
+        ...targetBatch,
+        rawFile: file,
+        pdfUrl: cloudUrl,
+        pageCount,
+        status: "Pending",
+      };
+
+      setBatches(prev => prev.map(b => b.id === targetBatch.id ? updatedBatch : b));
+      saveBatchToIndexedDb(updatedBatch);
+    } catch (err: any) {
+      console.error("Reupload failed", err);
+      alert("Failed to reupload file: " + err.message);
+    } finally {
+      setIsProcessing(false);
+      setReuploadBatchId(null);
+      if (reuploadInputRef.current) {
+        reuploadInputRef.current.value = "";
+      }
     }
   };
 
@@ -614,6 +669,61 @@ export const App: React.FC = () => {
             setSecondaryBatch(null);
           }}
         />
+      )}
+      {/* Hidden file input for Re-upload feature */}
+      <input
+        type="file"
+        ref={reuploadInputRef}
+        onChange={handleReuploadFile}
+        className="hidden"
+        accept=".pdf"
+      />
+
+      {/* OCR Error Modal */}
+      {ocrError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-[#1C2128] rounded-xl shadow-2xl p-6 w-full max-w-md border border-red-500/30">
+            <div className="flex items-start mb-4">
+              <div className="bg-red-500/20 p-2 rounded-full mr-3 shrink-0">
+                <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">OCR Processing Failed</h3>
+                <p className="text-sm text-gray-400 mt-1">Failed to process: <span className="text-gray-200">{ocrError.filename}</span></p>
+              </div>
+            </div>
+            
+            <div className="bg-black/30 rounded border border-[#30363D] p-3 text-sm text-red-400 mb-6 font-mono break-words max-h-32 overflow-y-auto">
+              {ocrError.message}
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setOcrError(null)}
+                className="px-4 py-2 bg-[#2D333B] hover:bg-[#3D444D] text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setReuploadBatchId(ocrError.batchId);
+                  if (reuploadInputRef.current) {
+                    reuploadInputRef.current.click();
+                  }
+                  setOcrError(null);
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center"
+              >
+                <svg className="w-4 h-4 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                </svg>
+                Re-upload & Scan
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
