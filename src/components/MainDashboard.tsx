@@ -5,6 +5,7 @@ import { PdfUploader, UploadMetadata } from "./PdfUploader";
 import { BulkPdfUploader } from "./BulkPdfUploader";
 import { ProcessingQueue } from "./ProcessingQueue";
 import { DiagnosticDashboard } from "./DiagnosticDashboard";
+import { HistoricalMigration } from "./HistoricalMigration";
 import { CompletionProgressMatrix } from "./CompletionProgressMatrix";
 import { BRANCH_LIST, MONTHS, BranchName } from "../constants/branches";
 import { BookCategory } from "../types/ledger";
@@ -106,6 +107,7 @@ export const MainDashboard: React.FC<Props> = ({
               {activeTab === "upload" && "Upload & Scan Ledger PDF Document"}
               {activeTab === "supabase" && "Supabase PostgreSQL Database Management"}
               {activeTab === "diagnostic" && "System Diagnostic & Data Integrity Audit"}
+              {activeTab === "migration" && "Historical Document Migration"}
             </h1>
             <p className="text-xs text-slate-400 mt-0.5 font-medium">
               Multi-Branch Daily Ledger Management System (13 Locations)
@@ -597,6 +599,11 @@ export const MainDashboard: React.FC<Props> = ({
           {/* TAB: DIAGNOSTIC */}
           {activeTab === "diagnostic" && (
             <DiagnosticDashboard />
+          )}
+
+          {/* TAB: MIGRATION */}
+          {activeTab === "migration" && (
+            <HistoricalMigration />
           )}
         </main>
       </div>
