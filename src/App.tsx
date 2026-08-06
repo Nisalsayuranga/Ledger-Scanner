@@ -11,6 +11,7 @@ import { DocumentService } from "./services/api/DocumentService";
 import { LedgerService } from "./services/api/LedgerService";
 import { TransactionService } from "./services/api/TransactionService";
 import { VerificationService } from "./services/api/VerificationService";
+import { CacheService } from "./services/cacheService";
 import { detectBranchAndCategoryFromFilename } from "./utils/filenameDetector";
 import { DailyLedger } from "./types/ledger";
 import { BranchName } from "./constants/branches";
@@ -45,7 +46,7 @@ export const App: React.FC = () => {
   
   const [reuploadBatchId, setReuploadBatchId] = useState<string | null>(null);
   const reuploadInputRef = React.useRef<HTMLInputElement>(null);
-  const autosaveTimers = React.useRef<{ [idx: number]: NodeJS.Timeout }>({});
+  const autosaveTimers = React.useRef<{ [idx: number]: ReturnType<typeof setTimeout> }>({});
   const [isAutosaving, setIsAutosaving] = useState(false);
   const [lastAutosaveTime, setLastAutosaveTime] = useState<Date | null>(null);
 
@@ -54,9 +55,19 @@ export const App: React.FC = () => {
     let isMounted = true;
 
     const loadInitialData = async () => {
-      const dbBatches = await BatchService.getBatches();
-      if (isMounted) {
-        setBatches(dbBatches);
+      try {
+        const dbBatches = await BatchService.getBatches();
+        if (isMounted) {
+          setBatches(dbBatches);
+          // Cache authoritative data locally
+          await CacheService.cacheBatches(dbBatches).catch(e => console.warn('Failed to cache batches', e));
+        }
+      } catch (err) {
+        console.warn("Failed to load batches from Supabase, attempting offline cache...", err);
+        const cached = await CacheService.getCachedBatches().catch(() => []);
+        if (isMounted) {
+          setBatches(cached);
+        }
       }
     };
 
@@ -239,7 +250,7 @@ export const App: React.FC = () => {
     }));
   };
 
-  const handleSelectBatch = (selectedBatch: BatchItem, dayIndex: number = 0) => {
+  const handleSelectBatch = async (selectedBatch: BatchItem, dayIndex: number = 0) => {
     const monthBatches = batches.filter(
       (b) =>
         b.branchName === selectedBatch.branchName &&
@@ -252,6 +263,34 @@ export const App: React.FC = () => {
 
     const mainLedgers = ensureLedgerDays(mainBook);
     const minorLedgers = minorBook ? ensureLedgerDays(minorBook) : [];
+
+    // Offline Conflict Resolution Check
+    if (mainBook.status !== "verified") {
+      try {
+        const unsynced = await CacheService.getUnsyncedDrafts(mainBook.id);
+        if (unsynced && unsynced.length > 0) {
+          const keepLocal = window.confirm(
+            "You have offline edits for this batch that haven't been saved to the server.\n\nClick OK to KEEP your offline edits.\nClick Cancel to DISCARD them and load the server version."
+          );
+          
+          if (keepLocal) {
+            // Apply cached drafts
+            for (const draft of unsynced) {
+              const idx = mainLedgers.findIndex(l => l.day_number === draft.day_number);
+              if (idx !== -1) mainLedgers[idx] = draft;
+            }
+          } else {
+            // Discard drafts
+            await CacheService.clearDraftsForBatch(mainBook.id);
+          }
+        }
+      } catch (err) {
+        console.warn("Error checking for offline drafts:", err);
+      }
+    } else {
+      // If batch is verified on server, always clear any local drafts silently (Server is truth)
+      await CacheService.clearDraftsForBatch(mainBook.id).catch(() => {});
+    }
 
     setActiveBatch(mainBook);
     setActiveLedgers(mainLedgers);
@@ -278,6 +317,9 @@ export const App: React.FC = () => {
 
         // Mark as verified
         await VerificationService.verifyBatch(activeBatch.id);
+        
+        // Clear local cache for this batch now that it's verified
+        await CacheService.clearDraftsForBatch(activeBatch.id).catch(() => {});
 
         const updatedBatch = { ...activeBatch, status: "verified" as const };
         
@@ -493,12 +535,9 @@ export const App: React.FC = () => {
       setProgressText(`Deleting ${batchToDelete.filename} from database...`);
 
       // 1. Delete from Supabase Database
-      await BatchService.deleteBatch(batchToDelete.id, batchToDelete.branchName, batchToDelete.year, batchToDelete.month, batchToDelete.bookCategory);
+      await BatchService.deleteBatch(batchToDelete.id);
 
-      // 2. Delete from IndexedDB
-      await deleteBatchFromIndexedDb(batchToDelete.id);
-
-      // 3. Remove from local state
+      // 2. Remove from local state
       setBatches((prev) => prev.filter((b) => b.id !== batchToDelete.id));
 
       if (activeBatch?.id === batchToDelete.id) {
@@ -552,32 +591,21 @@ export const App: React.FC = () => {
       }
 
       try {
-        // Upload to storage
-        const uploadResult = await uploadPdfToSupabase(
+        // Upload to storage and update DB
+        const publicUrl = await DocumentService.uploadDocument(
           file,
+          matchedBatch.id,
           matchedBatch.branchName,
           matchedBatch.year,
-          matchedBatch.month,
-          matchedBatch.bookCategory
-        );
-
-        // Update database
-        await updateBatchPdfUrlInSupabase(
-          matchedBatch.id,
-          uploadResult.publicUrl,
-          matchedBatch.filename,
-          matchedBatch.year,
-          matchedBatch.month,
-          matchedBatch.bookCategory,
-          matchedBatch.branchName
+          matchedBatch.month
         );
 
         // Update local state (no indexedDB needed)
-        const updatedBatch = { ...matchedBatch, pdfUrl: uploadResult.publicUrl };
+        const updatedBatch = { ...matchedBatch, pdfUrl: publicUrl };
 
         // Update state
         setBatches((prev) =>
-          prev.map((b) => (b.id === matchedBatch.id ? { ...b, pdfUrl: uploadResult.publicUrl } : b))
+          prev.map((b) => (b.id === matchedBatch.id ? updatedBatch : b))
         );
         successCount++;
       } catch (err: any) {
@@ -663,6 +691,9 @@ export const App: React.FC = () => {
               setActiveBatch(updatedBatch);
               setBatches((prev) => prev.map((b) => (b.id === activeBatch.id ? updatedBatch : b)));
               
+              // Instantly write to local cache as pending sync
+              CacheService.saveDraftLedger(activeBatch.id, updated, true).catch(e => console.warn('Cache write failed:', e));
+              
               // Debounced Autosave to Supabase (isOcrUpdate: false)
               if (autosaveTimers.current[idx]) {
                 clearTimeout(autosaveTimers.current[idx]);
@@ -674,10 +705,13 @@ export const App: React.FC = () => {
                   if (updated.transactions && updated.transactions.length > 0) {
                     await TransactionService.upsertTransactions(dbLedgerId, updated.transactions, false);
                   }
+                  // Sync successful, update cache
+                  await CacheService.saveDraftLedger(activeBatch.id, updated, false);
+                  
                   console.log(`Autosaved Draft for Day ${updated.day_number}`);
                   setLastAutosaveTime(new Date());
                 } catch (e) {
-                  console.error("Autosave failed:", e);
+                  console.error("Autosave failed, will remain as pending_sync in cache:", e);
                 } finally {
                   setIsAutosaving(false);
                 }

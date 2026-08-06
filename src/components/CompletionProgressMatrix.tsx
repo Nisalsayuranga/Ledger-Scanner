@@ -35,9 +35,9 @@ export const CompletionProgressMatrix: React.FC<Props> = ({ batches, _onCellClic
     const maxDays = Math.max(...matchingBatches.map((b) => b.pageCount || 0));
     
     let status: "Completed" | "Processing" | "Pending" = "Completed";
-    if (matchingBatches.some((b) => b.status === "Processing")) {
+    if (matchingBatches.some((b) => b.status === "processing")) {
       status = "Processing";
-    } else if (matchingBatches.some((b) => b.status === "Pending")) {
+    } else if (matchingBatches.some((b) => b.status === "needs_review" || b.status === "uploaded" || b.status === "upload")) {
       status = "Pending";
     }
 
