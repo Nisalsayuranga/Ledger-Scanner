@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { MainDashboard, BatchItem } from "./components/MainDashboard";
 import { SideBySideDashboard } from "./components/SideBySideDashboard";
-import { UploadMetadata } from "./components/PdfUploader";
-import { convertPdfToImages, getPdfPageCount } from "./services/pdfProcessor";
-import { extractLedgerFromImage } from "./services/ocrService";
+import { getPdfPageCount } from "./services/pdfProcessor";
+import { OcrProcessor } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
 import { BranchService } from "./services/api/BranchService";
 import { BatchService } from "./services/api/BatchService";
@@ -70,148 +69,7 @@ export const App: React.FC = () => {
 
 
 
-  // Background OCR processor queue loop
-  useEffect(() => {
-    // If a background task is already actively processing, do nothing
-    if (bgTask) return;
 
-    // Find the oldest pending batch (oldest first, so reverse batches array)
-    // Find the oldest uploaded batch (oldest first, so reverse batches array)
-    const nextUploaded = [...batches].reverse().find((b) => b.status === "uploaded");
-    if (!nextUploaded) return;
-
-    const processBatchInBackground = async (targetBatch: BatchItem) => {
-      setBgTask({
-        id: targetBatch.id,
-        filename: targetBatch.filename,
-        progress: 0,
-        total: targetBatch.pageCount || 1,
-        progressText: `Preparing pages for ${targetBatch.filename}...`
-      });
-
-      // Update to processing locally and in DB
-      setBatches((prev) =>
-        prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "processing" } : b))
-      );
-      await BatchService.updateBatchStatus(targetBatch.id, "processing").catch(console.error);
-
-      try {
-        let pageImages: string[] = targetBatch.pageImages || [];
-        if (!pageImages || pageImages.length === 0) {
-          if (targetBatch.rawFile) {
-            pageImages = await convertPdfToImages(targetBatch.rawFile);
-          } else {
-            const pdfUrl = targetBatch.pdfUrl || (
-              targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
-                ? targetBatch.filename
-                : `/${targetBatch.filename}`
-            );
-            pageImages = await convertPdfToImages(pdfUrl);
-          }
-        }
-
-        if (pageImages.length === 0) throw new Error("No page images rendered.");
-
-        const yearStr = targetBatch.year || 2025;
-        const monthStr = String(targetBatch.month || 10).padStart(2, "0");
-        const parsedLedgers: DailyLedger[] = [];
-
-        const CHUNK_SIZE = 2;
-        for (let i = 0; i < pageImages.length; i += CHUNK_SIZE) {
-          const chunk = pageImages.slice(i, i + CHUNK_SIZE);
-          const startPage = i + 1;
-          const endPage = Math.min(i + CHUNK_SIZE, pageImages.length);
-          const pendingCount = batches.filter(b => b.status === "uploaded" && b.id !== targetBatch.id).length;
-          const queueInfo = pendingCount > 0 ? ` (${pendingCount} queued)` : "";
-
-          setBgTask({
-            id: targetBatch.id,
-            filename: targetBatch.filename,
-            progress: startPage - 1,
-            total: pageImages.length,
-            progressText: `Scanning Pages ${startPage}–${endPage} of ${pageImages.length} with Gemini...${queueInfo}`
-          });
-
-          const chunkResults = await Promise.all(
-            chunk.map(async (imgUrl, chunkIdx) => {
-              const pageNum = i + chunkIdx + 1;
-              const defaultDate = `${yearStr}-${monthStr}-${String(pageNum).padStart(2, "0")}`;
-              try {
-                const extracted = await extractLedgerFromImage(imgUrl);
-                const ledger: DailyLedger = {
-                  day_number: pageNum,
-                  date: extracted.meta?.date || defaultDate,
-                  staff_name: extracted.meta?.staff || "Staff",
-                  cp_balance: extracted.meta?.cp_balance || 0,
-                  opening_balance: extracted.summary?.opening_balance || 0,
-                  cash_in: extracted.summary?.cash_in || 0,
-                  cash_out: extracted.summary?.cash_out || 0,
-                  total_loan: extracted.summary?.total_loan || 0,
-                  total_redeem: extracted.summary?.total_redeem || 0,
-                  receive: extracted.summary?.receive || 0,
-                  recovery: extracted.summary?.recovery || 0,
-                  insurance: extracted.summary?.insurance || 0,
-                  expenses: extracted.summary?.expenses || 0,
-                  calculated_closing_balance: extracted.summary?.closing_balance || 0,
-                  actual_cash_count: extracted.summary?.actual_cash_count || 0,
-                  variance: extracted.summary?.variance || 0,
-                  is_validated: false,
-                  page_image_url: imgUrl,
-                  transactions: (extracted.transactions || []).map((tx: any) => ({
-                    ...tx,
-                    ocr_raw_data: tx
-                  })),
-                  ocr_raw_data: extracted
-                };
-
-                // Stream into DB idempotently right away (as OCR update)
-                const dbLedgerId = await LedgerService.upsertLedger(targetBatch.id, ledger, true);
-                if (ledger.transactions && ledger.transactions.length > 0) {
-                  await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions, true);
-                }
-
-                return ledger;
-              } catch (ocrErr) {
-                console.error(`Page ${pageNum} OCR error:`, ocrErr);
-                throw new Error(`Page ${pageNum} failed: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`);
-              }
-            })
-          );
-          parsedLedgers.push(...chunkResults);
-        }
-
-        // Successfully completed scan, mark as needs_review
-        await BatchService.updateBatchStatus(targetBatch.id, "needs_review");
-        
-        const updatedBatch: BatchItem = {
-          ...targetBatch,
-          pageImages,
-          pageCount: parsedLedgers.length,
-          status: "needs_review",
-          data: parsedLedgers
-        };
-
-        setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b)));
-
-      } catch (err: any) {
-        console.error("Background OCR error:", err);
-        await BatchService.updateBatchStatus(targetBatch.id, "failed").catch(console.error);
-        
-        setBatches((prev) =>
-          prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "failed" } : b))
-        );
-        setOcrError({
-          batchId: targetBatch.id,
-          filename: targetBatch.filename,
-          message: err?.message || String(err)
-        });
-      } finally {
-        setBgTask(null);
-      }
-    };
-
-    processBatchInBackground(nextUploaded);
-  }, [batches, bgTask]);
 
   const ensureLedgerDays = (batch: BatchItem): DailyLedger[] => {
     if (batch.data && batch.data.length > 0) return batch.data;
@@ -389,35 +247,25 @@ export const App: React.FC = () => {
     }
   };
 
-  // DIRECT OCR SCANNING: Re-queue the batch as Pending to be processed automatically in the background
   const handleRunOcrOnBatch = async (targetBatch: BatchItem) => {
     try {
-      let updatedBatch = targetBatch;
-      if (!targetBatch.pageImages || targetBatch.pageImages.length === 0) {
-        if (targetBatch.pdfUrl || targetBatch.filename) {
-          setIsProcessing(true);
-          setProgressText("Downloading PDF and preparing pages for OCR...");
-          
-          const sourceUrl = targetBatch.pdfUrl || (
-            targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
-              ? targetBatch.filename
-              : `/${targetBatch.filename}`
-          );
-          
-          const imgs = await convertPdfToImages(sourceUrl);
-          updatedBatch = { ...targetBatch, pageImages: imgs, pageCount: imgs.length };
-        }
-      }
-
-      setBatches((prev) =>
-        prev.map((b) => (b.id === targetBatch.id ? { ...updatedBatch, status: "uploaded" } : b))
-      );
-      await BatchService.updateBatchStatus(targetBatch.id, "uploaded");
+      setIsProcessing(true);
+      const updatedBatch = await OcrProcessor.processBatch(targetBatch, (info) => {
+        setBgTask({
+          id: targetBatch.id,
+          filename: targetBatch.filename,
+          progress: info.progress,
+          total: info.total,
+          progressText: info.progressText
+        });
+      });
       
+      setBatches(prev => prev.map(b => b.id === targetBatch.id ? updatedBatch : b));
     } catch (e: any) {
       setOcrError({ batchId: targetBatch.id, filename: targetBatch.filename, message: e.message });
     } finally {
       setIsProcessing(false);
+      setBgTask(null);
     }
   };
 

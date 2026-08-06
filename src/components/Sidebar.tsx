@@ -1,7 +1,7 @@
 import React from "react";
 import { LayoutDashboard, Grid, FolderArchive, Upload, Database, Layers, Building2, RefreshCw } from "lucide-react";
 
-export type ActiveTab = "overview" | "matrix" | "archive" | "upload" | "supabase";
+export type ActiveTab = "overview" | "matrix" | "queue" | "archive" | "upload" | "supabase";
 
 export interface BgTask {
   id: string;
@@ -40,6 +40,12 @@ export const Sidebar: React.FC<Props> = ({
       label: "Completion Matrix",
       icon: Grid,
       badge: "2025"
+    },
+    {
+      id: "queue" as ActiveTab,
+      label: "Processing Queue",
+      icon: Layers,
+      badge: null
     },
     {
       id: "archive" as ActiveTab,

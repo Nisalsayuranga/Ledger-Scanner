@@ -3,6 +3,7 @@ import { FileText, FileSpreadsheet, CheckCircle2, Layers, Calendar, ArrowRight, 
 import { Sidebar, ActiveTab } from "./Sidebar";
 import { PdfUploader, UploadMetadata } from "./PdfUploader";
 import { BulkPdfUploader } from "./BulkPdfUploader";
+import { ProcessingQueue } from "./ProcessingQueue";
 import { CompletionProgressMatrix } from "./CompletionProgressMatrix";
 import { BRANCH_LIST, MONTHS, BranchName } from "../constants/branches";
 import { BookCategory } from "../types/ledger";
@@ -99,6 +100,7 @@ export const MainDashboard: React.FC<Props> = ({
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
               {activeTab === "overview" && "System Overview"}
               {activeTab === "matrix" && "Completion Progress Matrix (2025)"}
+              {activeTab === "queue" && "OCR Processing Queue"}
               {activeTab === "archive" && "Ledger Book Archives & Branch Repository"}
               {activeTab === "upload" && "Upload & Scan Ledger PDF Document"}
               {activeTab === "supabase" && "Supabase PostgreSQL Database Management"}
@@ -209,6 +211,25 @@ export const MainDashboard: React.FC<Props> = ({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* TAB: PROCESSING QUEUE */}
+          {activeTab === "queue" && (
+            <ProcessingQueue
+              batches={batches}
+              onProcessBatch={onRunOcrOnBatch}
+              onReviewBatch={(batch) => onSelectBatch(batch)}
+              onVerifyBatch={async () => {
+                if(window.confirm('Are you sure you want to mark this document as Verified?')) {
+                  // Implement verify logic if you want
+                }
+              }}
+              isProcessing={isProcessing}
+              activeProcessingId={bgTask?.id}
+              processingProgress={bgTask?.progress}
+              processingTotal={bgTask?.total}
+              processingText={bgTask?.progressText}
+            />
           )}
 
           {/* TAB 2: COMPLETION PROGRESS MATRIX */}

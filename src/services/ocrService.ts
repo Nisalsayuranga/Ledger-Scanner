@@ -1,5 +1,11 @@
 import { supabase } from "./supabaseClient";
 import { getPdfPageImageDataUrl } from "./pdfPageRenderer";
+import { BatchService } from "./api/BatchService";
+import { LedgerService } from "./api/LedgerService";
+import { TransactionService } from "./api/TransactionService";
+import { DailyLedger } from "../types/ledger";
+import { BatchItem } from "../components/MainDashboard";
+import { convertPdfToImages } from "./pdfProcessor";
 
 const blobToBase64 = (blob: Blob): Promise<{ base64Data: string; mimeType: string }> => {
   return new Promise((resolve, reject) => {
@@ -114,3 +120,136 @@ export const extractDateFromPageImage = async (imageInput: string): Promise<stri
     return null;
   }
 };
+
+export interface OcrProgressInfo {
+  progress: number;
+  total: number;
+  progressText: string;
+}
+
+export class OcrProcessor {
+  /**
+   * Processes a batch by converting its PDF to images, running Gemini OCR,
+   * and saving the structured data directly to Supabase.
+   *
+   * @param targetBatch The batch to process.
+   * @param onProgress Callback for UI progress updates.
+   * @returns The updated BatchItem with parsed ledgers.
+   */
+  static async processBatch(
+    targetBatch: BatchItem,
+    onProgress?: (info: OcrProgressInfo) => void
+  ): Promise<BatchItem> {
+    
+    // Safety protection against reprocessing verified data
+    if (targetBatch.status === 'verified') {
+      throw new Error("Cannot run OCR on a verified batch. Human corrections would be lost.");
+    }
+
+    onProgress?.({
+      progress: 0,
+      total: targetBatch.pageCount || 1,
+      progressText: `Preparing pages for ${targetBatch.filename}...`
+    });
+
+    await BatchService.updateBatchStatus(targetBatch.id, "processing");
+
+    let pageImages: string[] = targetBatch.pageImages || [];
+    
+    try {
+      if (!pageImages || pageImages.length === 0) {
+        if (targetBatch.rawFile) {
+          pageImages = await convertPdfToImages(targetBatch.rawFile);
+        } else {
+          const pdfUrl = targetBatch.pdfUrl || (
+            targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
+              ? targetBatch.filename
+              : `/${targetBatch.filename}`
+          );
+          pageImages = await convertPdfToImages(pdfUrl);
+        }
+      }
+
+      if (pageImages.length === 0) throw new Error("No page images rendered.");
+
+      const yearStr = targetBatch.year || 2025;
+      const monthStr = String(targetBatch.month || 10).padStart(2, "0");
+      const parsedLedgers: DailyLedger[] = [];
+
+      const CHUNK_SIZE = 2; // Process 2 pages at a time to respect rate limits
+      for (let i = 0; i < pageImages.length; i += CHUNK_SIZE) {
+        const chunk = pageImages.slice(i, i + CHUNK_SIZE);
+        const startPage = i + 1;
+        const endPage = Math.min(i + CHUNK_SIZE, pageImages.length);
+
+        onProgress?.({
+          progress: startPage - 1,
+          total: pageImages.length,
+          progressText: `Scanning Pages ${startPage}–${endPage} of ${pageImages.length} with Gemini...`
+        });
+
+        const chunkResults = await Promise.all(
+          chunk.map(async (imgUrl, chunkIdx) => {
+            const pageNum = i + chunkIdx + 1;
+            const defaultDate = `${yearStr}-${monthStr}-${String(pageNum).padStart(2, "0")}`;
+            try {
+              const extracted = await extractLedgerFromImage(imgUrl);
+              const ledger: DailyLedger = {
+                day_number: pageNum,
+                date: extracted.meta?.date || defaultDate,
+                staff_name: extracted.meta?.staff || "Staff",
+                cp_balance: extracted.meta?.cp_balance || 0,
+                opening_balance: extracted.summary?.opening_balance || 0,
+                cash_in: extracted.summary?.cash_in || 0,
+                cash_out: extracted.summary?.cash_out || 0,
+                total_loan: extracted.summary?.total_loan || 0,
+                total_redeem: extracted.summary?.total_redeem || 0,
+                receive: extracted.summary?.receive || 0,
+                recovery: extracted.summary?.recovery || 0,
+                insurance: extracted.summary?.insurance || 0,
+                expenses: extracted.summary?.expenses || 0,
+                calculated_closing_balance: extracted.summary?.closing_balance || 0,
+                actual_cash_count: extracted.summary?.actual_cash_count || 0,
+                variance: extracted.summary?.variance || 0,
+                is_validated: false,
+                page_image_url: imgUrl,
+                transactions: (extracted.transactions || []).map((tx: any) => ({
+                  ...tx,
+                  ocr_raw_data: tx
+                })),
+                ocr_raw_data: extracted
+              };
+
+              // Stream into DB idempotently right away (as OCR update)
+              const dbLedgerId = await LedgerService.upsertLedger(targetBatch.id, ledger, true);
+              if (ledger.transactions && ledger.transactions.length > 0) {
+                await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions, true);
+              }
+
+              return ledger;
+            } catch (ocrErr) {
+              console.error(`Page ${pageNum} OCR error:`, ocrErr);
+              throw new Error(`Page ${pageNum} failed: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`);
+            }
+          })
+        );
+        parsedLedgers.push(...chunkResults);
+      }
+
+      // Successfully completed scan, mark as needs_review
+      await BatchService.updateBatchStatus(targetBatch.id, "needs_review");
+      
+      return {
+        ...targetBatch,
+        pageImages,
+        pageCount: parsedLedgers.length,
+        status: "needs_review",
+        data: parsedLedgers
+      };
+      
+    } catch (err: any) {
+      await BatchService.updateBatchStatus(targetBatch.id, "failed").catch(console.error);
+      throw err;
+    }
+  }
+}
