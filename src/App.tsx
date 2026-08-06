@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { MainDashboard, BatchItem } from "./components/MainDashboard";
 import { SideBySideDashboard } from "./components/SideBySideDashboard";
+import { UploadMetadata } from "./components/PdfUploader";
 import { getPdfPageCount } from "./services/pdfProcessor";
 import { OcrProcessor } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";

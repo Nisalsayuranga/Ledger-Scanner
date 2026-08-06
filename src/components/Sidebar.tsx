@@ -1,7 +1,7 @@
 import React from "react";
-import { LayoutDashboard, Grid, FolderArchive, Upload, Database, Layers, Building2, RefreshCw } from "lucide-react";
+import { LayoutDashboard, Grid, FolderArchive, Upload, Database, Layers, Building2, RefreshCw, Activity } from "lucide-react";
 
-export type ActiveTab = "overview" | "matrix" | "queue" | "archive" | "upload" | "supabase";
+export type ActiveTab = "overview" | "matrix" | "queue" | "archive" | "upload" | "supabase" | "diagnostic";
 
 export interface BgTask {
   id: string;
@@ -64,6 +64,12 @@ export const Sidebar: React.FC<Props> = ({
       label: "Supabase DB Status",
       icon: Database,
       badge: "Live"
+    },
+    {
+      id: "diagnostic" as ActiveTab,
+      label: "Diagnostic Audit",
+      icon: Activity,
+      badge: "Admin"
     }
   ];
 
