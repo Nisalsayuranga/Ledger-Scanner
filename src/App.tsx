@@ -38,52 +38,19 @@ export const App: React.FC = () => {
     let isMounted = true;
 
     const loadInitialData = async () => {
-      const idbBatches = await getAllBatchesFromIndexedDb();
-      if (isMounted && idbBatches && idbBatches.length > 0) {
-        setBatches(idbBatches);
-      }
-
       const dbBatches = await fetchBatchesFromSupabase();
-      if (isMounted && dbBatches && dbBatches.length > 0) {
-        setBatches((prev) => {
-          const mergedMap = new Map<string, BatchItem>();
+      const idbBatches = await getAllBatchesFromIndexedDb();
 
-          // 1. Add all DB batches first (authoritative cloud state)
-          for (const dbB of dbBatches) {
-            mergedMap.set(dbB.id, dbB);
-          }
+      if (isMounted) {
+        // Keep only local batches that are not yet saved to DB
+        const pendingLocal = (idbBatches || []).filter(
+          (b) => b.status === "Pending" || b.status === "Processing"
+        );
+        const remote = dbBatches || [];
 
-          // 2. Merge local IDB batches (preserve pageImages or rawFile if available)
-          for (const localB of prev) {
-            const existingDbKey = Array.from(mergedMap.keys()).find((key) => {
-              const b = mergedMap.get(key)!;
-              return (
-                b.id === localB.id ||
-                b.filename === localB.filename ||
-                (b.branchName === localB.branchName &&
-                  b.year === localB.year &&
-                  b.month === localB.month &&
-                  b.bookCategory === localB.bookCategory)
-              );
-            });
-
-            if (existingDbKey) {
-              const dbItem = mergedMap.get(existingDbKey)!;
-              mergedMap.set(existingDbKey, {
-                ...dbItem,
-                pdfUrl: dbItem.pdfUrl || localB.pdfUrl,
-                pageImages: (dbItem.pageImages && dbItem.pageImages.length > 0) ? dbItem.pageImages : localB.pageImages,
-                rawFile: dbItem.rawFile || localB.rawFile
-              });
-            } else {
-              mergedMap.set(localB.id, localB);
-            }
-          }
-
-          const merged = Array.from(mergedMap.values());
-          saveAllBatchesToIndexedDb(merged);
-          return merged;
-        });
+        const merged = [...remote, ...pendingLocal];
+        setBatches(merged);
+        saveAllBatchesToIndexedDb(merged); // Overwrite cache to clear ghost records
       }
     };
 
@@ -306,8 +273,21 @@ export const App: React.FC = () => {
         batchName: activeBatch.pdfUrl || activeBatch.filename,
         ledgers: activeLedgers
       });
-      if (res.success) {
-        alert(`Batch for ${activeBatch.branchName} (${activeBatch.bookCategory === 'lr_book' ? 'L/R Book' : 'M Book'}) successfully saved to Supabase Database!`);
+      if (res.success && res.batchId) {
+        // Remove old temporary batch from IndexedDB
+        deleteBatchFromIndexedDb(activeBatch.id);
+        
+        // Create updated batch with new Supabase UUID
+        const updatedBatch = { ...activeBatch, id: res.batchId, status: "Completed" as const };
+        
+        // Update React state
+        setBatches(prev => prev.map(b => b.id === activeBatch.id ? updatedBatch : b));
+        setActiveBatch(updatedBatch);
+        
+        // Save to IndexedDB with correct UUID
+        saveBatchToIndexedDb(updatedBatch);
+        
+        alert(`Batch for ${updatedBatch.branchName} (${updatedBatch.bookCategory === 'lr_book' ? 'L/R Book' : 'M Book'}) successfully saved to Supabase Database!`);
       } else {
         alert("Saved to database with warnings. Check Supabase connection.");
       }
@@ -436,10 +416,37 @@ export const App: React.FC = () => {
   };
 
   // DIRECT OCR SCANNING: Re-queue the batch as Pending to be processed automatically in the background
-  const handleRunOcrOnBatch = (targetBatch: BatchItem) => {
-    setBatches((prev) =>
-      prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Pending", data: [] } : b))
-    );
+  const handleRunOcrOnBatch = async (targetBatch: BatchItem) => {
+    try {
+      let updatedBatch = targetBatch;
+      if (!targetBatch.pageImages || targetBatch.pageImages.length === 0) {
+        if (targetBatch.pdfUrl || targetBatch.filename) {
+          setIsProcessing(true);
+          setProgressText("Downloading PDF and preparing pages for OCR...");
+          
+          const sourceUrl = targetBatch.pdfUrl || (
+            targetBatch.filename.startsWith("http") || targetBatch.filename.startsWith("/")
+              ? targetBatch.filename
+              : `/${targetBatch.filename}`
+          );
+          
+          const imgs = await convertPdfToImages(sourceUrl);
+          updatedBatch = { ...targetBatch, pageImages: imgs };
+          
+          setBatches((prev) =>
+            prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b))
+          );
+        }
+      }
+      
+      setBatches((prev) =>
+        prev.map((b) => (b.id === updatedBatch.id ? { ...b, status: "Pending", data: [] } : b))
+      );
+    } catch (e: any) {
+      alert("Failed to load PDF for OCR: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleDeleteBatch = async (batchToDelete: BatchItem) => {
