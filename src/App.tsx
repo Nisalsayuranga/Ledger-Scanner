@@ -5,8 +5,12 @@ import { UploadMetadata } from "./components/PdfUploader";
 import { convertPdfToImages, getPdfPageCount } from "./services/pdfProcessor";
 import { extractLedgerFromImage } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
-import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase, uploadPdfToSupabase, updateBatchPdfUrlInSupabase } from "./services/supabaseStorageService";
-import { getAllBatchesFromIndexedDb, saveBatchToIndexedDb, saveAllBatchesToIndexedDb, deleteBatchFromIndexedDb } from "./services/indexedDbStorage";
+import { BranchService } from "./services/api/BranchService";
+import { BatchService } from "./services/api/BatchService";
+import { DocumentService } from "./services/api/DocumentService";
+import { LedgerService } from "./services/api/LedgerService";
+import { TransactionService } from "./services/api/TransactionService";
+import { VerificationService } from "./services/api/VerificationService";
 import { detectBranchAndCategoryFromFilename } from "./utils/filenameDetector";
 import { DailyLedger } from "./types/ledger";
 import { BranchName } from "./constants/branches";
@@ -42,24 +46,14 @@ export const App: React.FC = () => {
   const [reuploadBatchId, setReuploadBatchId] = useState<string | null>(null);
   const reuploadInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Restore batches from IndexedDB + Supabase DB on app mount
+  // Load batches from Supabase DB on app mount
   useEffect(() => {
     let isMounted = true;
 
     const loadInitialData = async () => {
-      const dbBatches = await fetchBatchesFromSupabase();
-      const idbBatches = await getAllBatchesFromIndexedDb();
-
+      const dbBatches = await BatchService.getBatches();
       if (isMounted) {
-        // Keep only local batches that are not yet saved to DB
-        const pendingLocal = (idbBatches || []).filter(
-          (b) => b.status === "Pending" || b.status === "Processing"
-        );
-        const remote = dbBatches || [];
-
-        const merged = [...remote, ...pendingLocal];
-        setBatches(merged);
-        saveAllBatchesToIndexedDb(merged); // Overwrite cache to clear ghost records
+        setBatches(dbBatches);
       }
     };
 
@@ -70,24 +64,17 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Save batches state to IndexedDB whenever updated
-  useEffect(() => {
-    if (batches && batches.length > 0) {
-      saveAllBatchesToIndexedDb(batches);
-    }
-  }, [batches]);
-
   // Background OCR processor queue loop
   useEffect(() => {
     // If a background task is already actively processing, do nothing
     if (bgTask) return;
 
     // Find the oldest pending batch (oldest first, so reverse batches array)
-    const nextPending = [...batches].reverse().find((b) => b.status === "Pending");
-    if (!nextPending) return;
+    // Find the oldest uploaded batch (oldest first, so reverse batches array)
+    const nextUploaded = [...batches].reverse().find((b) => b.status === "uploaded");
+    if (!nextUploaded) return;
 
     const processBatchInBackground = async (targetBatch: BatchItem) => {
-      // 1. Set background task state
       setBgTask({
         id: targetBatch.id,
         filename: targetBatch.filename,
@@ -96,14 +83,14 @@ export const App: React.FC = () => {
         progressText: `Preparing pages for ${targetBatch.filename}...`
       });
 
-      // 2. Set the batch status to "Processing" in local state
+      // Update to processing locally and in DB
       setBatches((prev) =>
-        prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Processing" } : b))
+        prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "processing" } : b))
       );
+      await BatchService.updateBatchStatus(targetBatch.id, "processing").catch(console.error);
 
       try {
         let pageImages: string[] = targetBatch.pageImages || [];
-
         if (!pageImages || pageImages.length === 0) {
           if (targetBatch.rawFile) {
             pageImages = await convertPdfToImages(targetBatch.rawFile);
@@ -117,9 +104,7 @@ export const App: React.FC = () => {
           }
         }
 
-        if (pageImages.length === 0) {
-          throw new Error("No page images rendered.");
-        }
+        if (pageImages.length === 0) throw new Error("No page images rendered.");
 
         const yearStr = targetBatch.year || 2025;
         const monthStr = String(targetBatch.month || 10).padStart(2, "0");
@@ -130,8 +115,7 @@ export const App: React.FC = () => {
           const chunk = pageImages.slice(i, i + CHUNK_SIZE);
           const startPage = i + 1;
           const endPage = Math.min(i + CHUNK_SIZE, pageImages.length);
-
-          const pendingCount = batches.filter(b => b.status === "Pending" && b.id !== targetBatch.id).length;
+          const pendingCount = batches.filter(b => b.status === "uploaded" && b.id !== targetBatch.id).length;
           const queueInfo = pendingCount > 0 ? ` (${pendingCount} queued)` : "";
 
           setBgTask({
@@ -146,10 +130,9 @@ export const App: React.FC = () => {
             chunk.map(async (imgUrl, chunkIdx) => {
               const pageNum = i + chunkIdx + 1;
               const defaultDate = `${yearStr}-${monthStr}-${String(pageNum).padStart(2, "0")}`;
-
               try {
                 const extracted = await extractLedgerFromImage(imgUrl);
-                return {
+                const ledger: DailyLedger = {
                   day_number: pageNum,
                   date: extracted.meta?.date || defaultDate,
                   staff_name: extracted.meta?.staff || "Staff",
@@ -169,55 +152,43 @@ export const App: React.FC = () => {
                   is_validated: false,
                   page_image_url: imgUrl,
                   transactions: extracted.transactions || []
-                } as DailyLedger;
+                };
+
+                // Stream into DB idempotently right away
+                const dbLedgerId = await LedgerService.upsertLedger(targetBatch.id, ledger);
+                if (ledger.transactions && ledger.transactions.length > 0) {
+                  await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions);
+                }
+
+                return ledger;
               } catch (ocrErr) {
                 console.error(`Page ${pageNum} OCR error:`, ocrErr);
                 throw new Error(`Page ${pageNum} failed: ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}`);
               }
             })
           );
-
           parsedLedgers.push(...chunkResults);
         }
 
-        // Successfully completed scan
+        // Successfully completed scan, mark as needs_review
+        await BatchService.updateBatchStatus(targetBatch.id, "needs_review");
+        
         const updatedBatch: BatchItem = {
           ...targetBatch,
           pageImages,
           pageCount: parsedLedgers.length,
-          status: "Completed",
+          status: "needs_review",
           data: parsedLedgers
         };
 
         setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b)));
-        saveBatchToIndexedDb(updatedBatch);
-
-        // Auto save to Supabase Database
-        try {
-          const res = await saveBatchToSupabase({
-            branchName: updatedBatch.branchName,
-            year: updatedBatch.year,
-            month: updatedBatch.month,
-            bookCategory: updatedBatch.bookCategory,
-            batchName: updatedBatch.pdfUrl || updatedBatch.filename,
-            ledgers: parsedLedgers
-          });
-
-          if (res && res.batchId) {
-            const finalBatch = { ...updatedBatch, id: res.batchId };
-            setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? finalBatch : b)));
-            await deleteBatchFromIndexedDb(targetBatch.id);
-            await saveBatchToIndexedDb(finalBatch);
-          }
-        } catch (e) {
-          console.error("Auto DB save warn:", e);
-        }
 
       } catch (err: any) {
         console.error("Background OCR error:", err);
-        // Reset status to Pending to let user re-queue or see failure
+        await BatchService.updateBatchStatus(targetBatch.id, "failed").catch(console.error);
+        
         setBatches((prev) =>
-          prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "Pending" } : b))
+          prev.map((b) => (b.id === targetBatch.id ? { ...b, status: "failed" } : b))
         );
         setOcrError({
           batchId: targetBatch.id,
@@ -229,7 +200,7 @@ export const App: React.FC = () => {
       }
     };
 
-    processBatchInBackground(nextPending);
+    processBatchInBackground(nextUploaded);
   }, [batches, bgTask]);
 
   const ensureLedgerDays = (batch: BatchItem): DailyLedger[] => {
@@ -289,31 +260,28 @@ export const App: React.FC = () => {
 
   const handleSaveActiveBatchToDb = async () => {
     if (activeBatch && activeLedgers.length > 0) {
-      const res = await saveBatchToSupabase({
-        branchName: activeBatch.branchName,
-        year: activeBatch.year,
-        month: activeBatch.month,
-        bookCategory: activeBatch.bookCategory,
-        batchName: activeBatch.pdfUrl || activeBatch.filename,
-        ledgers: activeLedgers
-      });
-      if (res.success && res.batchId) {
-        // Remove old temporary batch from IndexedDB
-        deleteBatchFromIndexedDb(activeBatch.id);
-        
-        // Create updated batch with new Supabase UUID
-        const updatedBatch = { ...activeBatch, id: res.batchId, status: "Completed" as const };
+      try {
+        // Save any edits made by the user before verifying
+        for (const ledger of activeLedgers) {
+          const dbLedgerId = await LedgerService.upsertLedger(activeBatch.id, ledger);
+          if (ledger.transactions && ledger.transactions.length > 0) {
+            await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions);
+          }
+        }
+
+        // Mark as verified
+        await VerificationService.verifyBatch(activeBatch.id);
+
+        const updatedBatch = { ...activeBatch, status: "verified" as const };
         
         // Update React state
         setBatches(prev => prev.map(b => b.id === activeBatch.id ? updatedBatch : b));
         setActiveBatch(updatedBatch);
         
-        // Save to IndexedDB with correct UUID
-        saveBatchToIndexedDb(updatedBatch);
-        
-        alert(`Batch for ${updatedBatch.branchName} (${updatedBatch.bookCategory === 'lr_book' ? 'L/R Book' : 'M Book'}) successfully saved to Supabase Database!`);
-      } else {
-        alert("Saved to database with warnings. Check Supabase connection.");
+        alert(`Batch for ${updatedBatch.branchName} (${updatedBatch.bookCategory === 'lr_book' ? 'L/R Book' : 'M Book'}) successfully verified!`);
+      } catch (err) {
+        console.error(err);
+        alert("Failed to verify batch. Please try again.");
       }
     }
   };
@@ -336,19 +304,21 @@ export const App: React.FC = () => {
       try {
         pageCount = await getPdfPageCount(file);
         
-        setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
-        const uploadResult = await uploadPdfToSupabase(
-          file,
-          detected.branchName,
-          detected.year,
-          detected.month,
-          detected.bookCategory
-        );
-        cloudUrl = uploadResult.publicUrl;
-        dbBatchId = uploadResult.batchId;
-      } catch (e) {
-        console.error(`Failed to convert/upload PDF ${file.name}:`, e);
-      }
+          const branchId = await BranchService.resolveBranchId(detected.branchName);
+          dbBatchId = await BatchService.createOrGetBatch({
+            branchId,
+            year: detected.year,
+            month: detected.month,
+            bookCategory: detected.bookCategory,
+            originalFilename: file.name,
+            fileSizeBytes: file.size
+          });
+          
+          setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
+          cloudUrl = await DocumentService.uploadDocument(file, dbBatchId, branchId, detected.year, detected.month);
+        } catch (e) {
+          console.error(`Failed to convert/upload PDF ${file.name}:`, e);
+        }
 
       const item: BatchItem = {
         id: dbBatchId || `batch-bulk-${Date.now()}-${idx}`,
@@ -360,7 +330,7 @@ export const App: React.FC = () => {
         fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
         pageCount: pageCount,
         extractedDate: `${detected.year}-${detected.month}`,
-        status: "Pending",
+        status: "uploaded",
         data: [],
         rawFile: file,
         pageImages: [],
@@ -368,7 +338,6 @@ export const App: React.FC = () => {
       };
 
       newBatches.push(item);
-      saveBatchToIndexedDb(item);
     }
 
     setBatches((prev) => [...newBatches, ...prev]);
@@ -383,16 +352,19 @@ export const App: React.FC = () => {
       const pageCount = await getPdfPageCount(file);
 
       setProgressText(`Uploading PDF to Supabase Storage...`);
-      const uploadResult = await uploadPdfToSupabase(
-        file,
-        metadata.branchName,
-        metadata.year,
-        metadata.month,
-        metadata.bookCategory
-      );
+      const branchId = await BranchService.resolveBranchId(metadata.branchName);
+      const batchId = await BatchService.createOrGetBatch({
+        branchId,
+        year: metadata.year,
+        month: metadata.month,
+        bookCategory: metadata.bookCategory,
+        originalFilename: file.name,
+        fileSizeBytes: file.size
+      });
+      const cloudUrl = await DocumentService.uploadDocument(file, batchId, branchId, metadata.year, metadata.month);
 
       const newBatchItem: BatchItem = {
-        id: uploadResult.batchId,
+        id: batchId,
         filename: file.name,
         branchName: metadata.branchName,
         year: metadata.year,
@@ -401,14 +373,13 @@ export const App: React.FC = () => {
         fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
         pageCount: pageCount,
         extractedDate: `${metadata.year}-${metadata.month}`,
-        status: "Pending",
+        status: "uploaded",
         data: [],
         rawFile: file,
         pageImages: [],
-        pdfUrl: uploadResult.publicUrl
+        pdfUrl: cloudUrl
       };
 
-      saveBatchToIndexedDb(newBatchItem);
       setBatches((prev) => [newBatchItem, ...prev]);
     } catch (err) {
       console.error(err);
@@ -427,17 +398,9 @@ export const App: React.FC = () => {
     // 2. Locate target batch and save changes to DBs
     const targetBatch = batches.find((b) => b.id === batchId);
     if (targetBatch) {
-      updateBatchBranchInSupabase(
-        batchId,
-        newBranch,
-        targetBatch.filename,
-        targetBatch.year,
-        targetBatch.month,
-        targetBatch.bookCategory
-      ).catch((e) => console.error("Error updating branch in Supabase:", e));
-
-      const updatedBatch = { ...targetBatch, branchName: newBranch };
-      saveBatchToIndexedDb(updatedBatch).catch((e) => console.error("Error saving moved batch to IndexedDB:", e));
+      BranchService.resolveBranchId(newBranch).then(branchId => {
+        BatchService.updateBatchBranch(batchId, branchId).catch(console.error);
+      });
     }
   };
 
@@ -457,17 +420,15 @@ export const App: React.FC = () => {
           );
           
           const imgs = await convertPdfToImages(sourceUrl);
-          updatedBatch = { ...targetBatch, pageImages: imgs };
-          
-          setBatches((prev) =>
-            prev.map((b) => (b.id === targetBatch.id ? updatedBatch : b))
-          );
+          updatedBatch = { ...targetBatch, pageImages: imgs, pageCount: imgs.length };
         }
       }
-      
+
       setBatches((prev) =>
-        prev.map((b) => (b.id === updatedBatch.id ? { ...b, status: "Pending", data: [] } : b))
+        prev.map((b) => (b.id === targetBatch.id ? { ...updatedBatch, status: "uploaded" } : b))
       );
+      await BatchService.updateBatchStatus(targetBatch.id, "uploaded");
+      
     } catch (e: any) {
       setOcrError({ batchId: targetBatch.id, filename: targetBatch.filename, message: e.message });
     } finally {
@@ -487,21 +448,22 @@ export const App: React.FC = () => {
 
     try {
       const pageCount = await getPdfPageCount(file);
-      const uploadResult = await uploadPdfToSupabase(
+      const branchId = await BranchService.resolveBranchId(targetBatch.branchName);
+      
+      const cloudUrl = await DocumentService.uploadDocument(
         file,
-        targetBatch.branchName,
+        targetBatch.id,
+        branchId,
         targetBatch.year,
-        targetBatch.month,
-        targetBatch.bookCategory
+        targetBatch.month
       );
 
       const updatedBatch: BatchItem = {
         ...targetBatch,
-        id: uploadResult.batchId,
         rawFile: file,
-        pdfUrl: uploadResult.publicUrl,
+        pdfUrl: cloudUrl,
         pageCount,
-        status: "Pending",
+        status: "uploaded",
       };
 
       setBatches(prev => prev.map(b => b.id === targetBatch.id ? updatedBatch : b));
@@ -524,7 +486,7 @@ export const App: React.FC = () => {
       setProgressText(`Deleting ${batchToDelete.filename} from database...`);
 
       // 1. Delete from Supabase Database
-      await deleteBatchFromSupabase(batchToDelete.id, batchToDelete.branchName, batchToDelete.year, batchToDelete.month, batchToDelete.bookCategory);
+      await BatchService.deleteBatch(batchToDelete.id, batchToDelete.branchName, batchToDelete.year, batchToDelete.month, batchToDelete.bookCategory);
 
       // 2. Delete from IndexedDB
       await deleteBatchFromIndexedDb(batchToDelete.id);

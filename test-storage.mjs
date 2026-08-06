@@ -1,8 +1,34 @@
 import { createClient } from '@supabase/supabase-js';
+import * as dotenv from 'dotenv';
 
-const supabaseUrl = 'https://sdakiautnmwoqppbjkkl.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNkYWtpYXV0bm13b3FwcGJqa2tsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0NjU2MTEsImV4cCI6MjEwMTA0MTYxMX0.Dmy4a8L2z7EsCuy_Xden4iXy-egdjKfyDBPwH-y-Juk';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+dotenv.config({ path: '.env.local' });
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://sdakiautnmwoqppbjkkl.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseKey) {
+  console.error("Missing SUPABASE_SERVICE_ROLE_KEY or VITE_SUPABASE_ANON_KEY in environment variables.");
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Helper function to authenticate if using anon key
+async function authenticateTestUser() {
+  const email = process.env.SUPABASE_TEST_EMAIL;
+  const password = process.env.SUPABASE_TEST_PASSWORD;
+  
+  if (email && password) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      console.error("Test user authentication failed:", error.message);
+      process.exit(1);
+    }
+    console.log("Authenticated test user successfully.");
+  } else if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn("WARNING: Running with Anon key and no test user credentials. RLS policies might block operations.");
+  }
+}
 
 const BUCKET = 'ledger-documents';
 
@@ -145,6 +171,7 @@ async function test_4_db_record_with_metadata() {
 
 async function runAllTests() {
   console.log('=== Phase 2 Storage Tests ===');
+  await authenticateTestUser();
   await test_1_same_filename_different_batches();
   await test_2_different_branches();
   await test_3_upsert_false_prevents_overwrite();

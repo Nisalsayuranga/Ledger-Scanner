@@ -17,7 +17,7 @@ export interface BatchItem {
   fileSize: string;
   pageCount: number;
   extractedDate: string;
-  status: "Completed" | "Processing" | "Pending";
+  status: "upload" | "uploaded" | "processing" | "needs_review" | "verified" | "failed";
   data?: any[];
   rawFile?: File;
   pageImages?: string[];

@@ -569,7 +569,7 @@ export const SideBySideDashboard: React.FC<Props> = ({
                   }`}
                 >
                   {dbSavedSuccess ? <Check className="h-4 w-4 text-emerald-400" /> : <Database className="h-4 w-4" />}
-                  {isSavingDb ? "Saving..." : dbSavedSuccess ? "Saved to DB!" : "Save"}
+                  {isSavingDb ? "Verifying..." : dbSavedSuccess ? "Verified & Saved!" : "Complete Verification"}
                 </button>
               )}
 
