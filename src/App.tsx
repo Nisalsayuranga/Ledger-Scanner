@@ -332,23 +332,26 @@ export const App: React.FC = () => {
 
       let pageCount = 0;
       let cloudUrl: string | undefined = undefined;
+      let dbBatchId: string | undefined = undefined;
       try {
         pageCount = await getPdfPageCount(file);
         
         setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
-        cloudUrl = await uploadPdfToSupabase(
+        const uploadResult = await uploadPdfToSupabase(
           file,
           detected.branchName,
           detected.year,
           detected.month,
           detected.bookCategory
         );
+        cloudUrl = uploadResult.publicUrl;
+        dbBatchId = uploadResult.batchId;
       } catch (e) {
         console.error(`Failed to convert/upload PDF ${file.name}:`, e);
       }
 
       const item: BatchItem = {
-        id: `batch-bulk-${Date.now()}-${idx}`,
+        id: dbBatchId || `batch-bulk-${Date.now()}-${idx}`,
         filename: file.name,
         branchName: detected.branchName,
         year: detected.year,
@@ -380,7 +383,7 @@ export const App: React.FC = () => {
       const pageCount = await getPdfPageCount(file);
 
       setProgressText(`Uploading PDF to Supabase Storage...`);
-      const cloudUrl = await uploadPdfToSupabase(
+      const uploadResult = await uploadPdfToSupabase(
         file,
         metadata.branchName,
         metadata.year,
@@ -389,7 +392,7 @@ export const App: React.FC = () => {
       );
 
       const newBatchItem: BatchItem = {
-        id: `batch-${Date.now()}`,
+        id: uploadResult.batchId,
         filename: file.name,
         branchName: metadata.branchName,
         year: metadata.year,
@@ -402,7 +405,7 @@ export const App: React.FC = () => {
         data: [],
         rawFile: file,
         pageImages: [],
-        pdfUrl: cloudUrl
+        pdfUrl: uploadResult.publicUrl
       };
 
       saveBatchToIndexedDb(newBatchItem);
@@ -484,7 +487,7 @@ export const App: React.FC = () => {
 
     try {
       const pageCount = await getPdfPageCount(file);
-      const cloudUrl = await uploadPdfToSupabase(
+      const uploadResult = await uploadPdfToSupabase(
         file,
         targetBatch.branchName,
         targetBatch.year,
@@ -494,8 +497,9 @@ export const App: React.FC = () => {
 
       const updatedBatch: BatchItem = {
         ...targetBatch,
+        id: uploadResult.batchId,
         rawFile: file,
-        pdfUrl: cloudUrl,
+        pdfUrl: uploadResult.publicUrl,
         pageCount,
         status: "Pending",
       };
@@ -580,7 +584,7 @@ export const App: React.FC = () => {
 
       try {
         // Upload to storage
-        const cloudUrl = await uploadPdfToSupabase(
+        const uploadResult = await uploadPdfToSupabase(
           file,
           matchedBatch.branchName,
           matchedBatch.year,
@@ -591,7 +595,7 @@ export const App: React.FC = () => {
         // Update database
         await updateBatchPdfUrlInSupabase(
           matchedBatch.id,
-          cloudUrl,
+          uploadResult.publicUrl,
           matchedBatch.filename,
           matchedBatch.year,
           matchedBatch.month,
@@ -600,12 +604,12 @@ export const App: React.FC = () => {
         );
 
         // Update local IndexedDB
-        const updatedBatch = { ...matchedBatch, pdfUrl: cloudUrl };
+        const updatedBatch = { ...matchedBatch, pdfUrl: uploadResult.publicUrl };
         await saveBatchToIndexedDb(updatedBatch);
 
         // Update state
         setBatches((prev) =>
-          prev.map((b) => (b.id === matchedBatch.id ? { ...b, pdfUrl: cloudUrl } : b))
+          prev.map((b) => (b.id === matchedBatch.id ? { ...b, pdfUrl: uploadResult.publicUrl } : b))
         );
         successCount++;
       } catch (err: any) {

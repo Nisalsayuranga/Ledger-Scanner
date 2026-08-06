@@ -1,6 +1,8 @@
 import { supabase } from "./supabaseClient";
 import { DailyLedger, BookCategory } from "../types/ledger";
 
+const BUCKET = "ledger-documents";
+
 interface SaveBatchOptions {
   branchName: string;
   year: number;
@@ -11,7 +13,7 @@ interface SaveBatchOptions {
 }
 
 const getStoragePathFromUrl = (url: string) => {
-  const marker = "/public/ledger-documents/";
+  const marker = `/public/${BUCKET}/`;
   const idx = url.indexOf(marker);
   if (idx !== -1) {
     return decodeURIComponent(url.substring(idx + marker.length));
@@ -19,35 +21,204 @@ const getStoragePathFromUrl = (url: string) => {
   return null;
 };
 
+// ---------- Phase 2: Immutable Document Storage ----------
+
+/**
+ * Build the immutable storage path for a document.
+ * Pattern: {branchId}/{year}/{MM}/{batchId}/original/{batchId}.pdf
+ */
+const buildStoragePath = (
+  branchId: string,
+  year: number,
+  month: number,
+  batchId: string
+): string => {
+  const mm = String(month).padStart(2, "0");
+  return `${branchId}/${year}/${mm}/${batchId}/original/${batchId}.pdf`;
+};
+
+/**
+ * Step 1 of the upload lifecycle: Create the database record FIRST.
+ * Returns the Supabase-generated UUID (batchId) which becomes the
+ * permanent anchor for both the DB row and the Storage object.
+ */
+export const createBatchRecord = async (opts: {
+  branchName: string;
+  year: number;
+  month: number;
+  bookCategory: BookCategory;
+  originalFilename: string;
+  fileSizeBytes: number;
+}): Promise<{ batchId: string; branchId: string }> => {
+  // 1. Resolve branch
+  const { data: branchData } = await supabase
+    .from("branches")
+    .select("id")
+    .eq("branch_name", opts.branchName)
+    .maybeSingle();
+
+  let branchId = branchData?.id;
+  if (!branchId) {
+    const { data: newBranch } = await supabase
+      .from("branches")
+      .insert({ branch_name: opts.branchName })
+      .select("id")
+      .single();
+    branchId = newBranch?.id;
+  }
+  if (!branchId) throw new Error("Could not resolve branch ID");
+
+  // 2. Insert batch record with status = 'uploaded', NO pdf_url yet
+  const formattedMonthStr = `${opts.year}-${String(opts.month).padStart(2, "0")}-01`;
+  const { data: batchData, error: batchErr } = await supabase
+    .from("ledger_batches")
+    .insert({
+      branch_id: branchId,
+      batch_month: formattedMonthStr,
+      year: opts.year,
+      month: opts.month,
+      book_category: opts.bookCategory,
+      status: "uploaded",
+      original_filename: opts.originalFilename,
+      mime_type: "application/pdf",
+      file_size_bytes: opts.fileSizeBytes,
+      storage_bucket: BUCKET,
+      uploaded_at: new Date().toISOString()
+    })
+    .select("id")
+    .single();
+
+  if (batchErr || !batchData) {
+    console.error("Batch record creation failed:", batchErr);
+    throw batchErr || new Error("Batch insert returned no data");
+  }
+
+  return { batchId: batchData.id, branchId };
+};
+
+/**
+ * Step 2 of the upload lifecycle: Upload the file to Storage using
+ * the batch UUID as the path anchor. Then update the DB record.
+ *
+ * If the upload succeeds but the DB update fails, the orphaned
+ * Storage file is cleaned up before throwing.
+ */
+export const uploadDocumentForBatch = async (
+  file: File,
+  batchId: string,
+  branchId: string,
+  year: number,
+  month: number
+): Promise<string> => {
+  const storagePath = buildStoragePath(branchId, year, month, batchId);
+
+  // Upload with upsert: false — never overwrite
+  const { error: uploadErr } = await supabase.storage
+    .from(BUCKET)
+    .upload(storagePath, file, {
+      cacheControl: "3600",
+      upsert: false
+    });
+
+  if (uploadErr) {
+    console.error("Storage upload failed:", uploadErr);
+    // Mark the DB record as failed so the user can retry
+    await supabase
+      .from("ledger_batches")
+      .update({ status: "failed" })
+      .eq("id", batchId);
+    throw uploadErr;
+  }
+
+  // Get the public URL
+  const { data: urlData } = supabase.storage
+    .from(BUCKET)
+    .getPublicUrl(storagePath);
+  const publicUrl = urlData.publicUrl;
+
+  // Update DB record with the storage path and URL
+  const { error: updateErr } = await supabase
+    .from("ledger_batches")
+    .update({
+      original_pdf_url: publicUrl,
+      storage_path: storagePath
+    })
+    .eq("id", batchId);
+
+  if (updateErr) {
+    // DB update failed after upload succeeded → clean up orphaned file
+    console.error("DB update failed after upload, cleaning up orphan:", updateErr);
+    await supabase.storage.from(BUCKET).remove([storagePath]);
+    throw updateErr;
+  }
+
+  return publicUrl;
+};
+
+/**
+ * Check whether a Storage object exists for a given batch.
+ */
+export const checkDocumentExists = async (batchId: string): Promise<boolean> => {
+  const { data } = await supabase
+    .from("ledger_batches")
+    .select("storage_path")
+    .eq("id", batchId)
+    .maybeSingle();
+
+  if (!data?.storage_path) return false;
+
+  const { data: fileList } = await supabase.storage
+    .from(BUCKET)
+    .list(data.storage_path.substring(0, data.storage_path.lastIndexOf("/")));
+
+  const filename = data.storage_path.substring(data.storage_path.lastIndexOf("/") + 1);
+  return (fileList || []).some((f: any) => f.name === filename);
+};
+
+/**
+ * Delete the Storage object for a given batch (used in batch deletion).
+ */
+export const deleteDocumentFromStorage = async (batchId: string): Promise<void> => {
+  const { data } = await supabase
+    .from("ledger_batches")
+    .select("storage_path")
+    .eq("id", batchId)
+    .maybeSingle();
+
+  if (data?.storage_path) {
+    await supabase.storage.from(BUCKET).remove([data.storage_path]);
+  }
+};
+
+// ---------- Legacy wrapper for backward compatibility ----------
+
+/**
+ * Combined upload function: creates DB record first, then uploads file.
+ * Returns the public URL. This replaces the old uploadPdfToSupabase.
+ */
 export const uploadPdfToSupabase = async (
   file: File,
   branchName: string,
   year: number,
   month: number,
   bookCategory: BookCategory
-): Promise<string> => {
-  // Clean filename to remove spaces
-  const cleanFilename = file.name.replace(/\s+/g, "_");
-  const filePath = `${branchName}/${year}/${month}/${bookCategory}/${cleanFilename}`;
+): Promise<{ publicUrl: string; batchId: string }> => {
+  const { batchId, branchId } = await createBatchRecord({
+    branchName,
+    year,
+    month,
+    bookCategory,
+    originalFilename: file.name,
+    fileSizeBytes: file.size
+  });
 
-  const { error } = await supabase.storage
-    .from("ledger-documents")
-    .upload(filePath, file, {
-      cacheControl: "3600",
-      upsert: true
-    });
+  const publicUrl = await uploadDocumentForBatch(
+    file, batchId, branchId, year, month
+  );
 
-  if (error) {
-    console.error("Storage upload error:", error);
-    throw error;
-  }
-
-  const { data } = supabase.storage
-    .from("ledger-documents")
-    .getPublicUrl(filePath);
-
-  return data.publicUrl;
+  return { publicUrl, batchId };
 };
+
 
 export const deleteBatchFromSupabase = async (
   batchIdOrFilename: string,
@@ -157,7 +328,7 @@ export const saveBatchToSupabase = async (options: SaveBatchOptions) => {
         month: month,
         book_category: bookCategory,
         original_pdf_url: batchName,
-        status: "completed"
+        status: "needs_review"
       })
       .select("id")
       .single();
@@ -244,6 +415,7 @@ export const fetchBatchesFromSupabase = async () => {
         year,
         month,
         book_category,
+        original_filename,
         original_pdf_url,
         status,
         branches ( branch_name ),
@@ -293,9 +465,18 @@ export const fetchBatchesFromSupabase = async () => {
 
     return batchesData.map((b: any) => {
       const isCloudUrl = b.original_pdf_url && b.original_pdf_url.startsWith("http");
-      const cleanFilename = isCloudUrl 
-        ? b.original_pdf_url.substring(b.original_pdf_url.lastIndexOf("/") + 1)
-        : (b.original_pdf_url || "Ledger_Book.pdf");
+      // Prefer the dedicated original_filename column; fall back to URL parsing
+      const cleanFilename = b.original_filename
+        || (isCloudUrl
+          ? b.original_pdf_url.substring(b.original_pdf_url.lastIndexOf("/") + 1)
+          : (b.original_pdf_url || "Ledger_Book.pdf"));
+
+      // Map DB status to UI status
+      const mapStatus = (s: string): "Completed" | "Processing" | "Pending" => {
+        if (s === "needs_review" || s === "verified" || s === "completed") return "Completed";
+        if (s === "processing") return "Processing";
+        return "Pending";
+      };
 
       return {
         id: b.id,
@@ -307,7 +488,7 @@ export const fetchBatchesFromSupabase = async () => {
         fileSize: "Uploaded",
         pageCount: b.daily_ledgers?.length || 0,
         extractedDate: b.batch_month || "2025-10",
-        status: (b.status === "completed" ? "Completed" : "Pending") as "Completed" | "Pending",
+        status: mapStatus(b.status || "uploaded"),
         pdfUrl: isCloudUrl ? b.original_pdf_url : undefined,
         data: (b.daily_ledgers || []).map((dl: any) => ({
         id: dl.id,
@@ -477,7 +658,7 @@ export const updateBatchPdfUrlInSupabase = async (
     if (targetDbBatchId) {
       const { error } = await supabase
         .from("ledger_batches")
-        .update({ original_pdf_url: newPdfUrl, status: "completed" })
+        .update({ original_pdf_url: newPdfUrl, status: "needs_review" })
         .eq("id", targetDbBatchId);
       if (error) throw error;
     } else if (branchName) {
@@ -511,7 +692,7 @@ export const updateBatchPdfUrlInSupabase = async (
             month: month,
             book_category: bookCategory,
             original_pdf_url: newPdfUrl,
-            status: "completed"
+            status: "needs_review"
           });
         if (insErr) {
           console.error("Error inserting batch into Supabase DB:", insErr);
