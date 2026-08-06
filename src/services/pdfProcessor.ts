@@ -40,7 +40,7 @@ export const convertPdfToImages = async (fileOrUrl: File | string | ArrayBuffer)
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 2.0 }); // High DPI rendering
+    const viewport = page.getViewport({ scale: 1.5 }); // Balanced DPI rendering
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
 
@@ -49,7 +49,7 @@ export const convertPdfToImages = async (fileOrUrl: File | string | ArrayBuffer)
 
     if (context) {
       await page.render({ canvasContext: context, viewport }).promise;
-      imageUrls.push(canvas.toDataURL("image/jpeg", 0.85));
+      imageUrls.push(canvas.toDataURL("image/jpeg", 0.75));
     }
   }
 

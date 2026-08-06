@@ -116,7 +116,7 @@ export const App: React.FC = () => {
         const monthStr = String(targetBatch.month || 10).padStart(2, "0");
         const parsedLedgers: DailyLedger[] = [];
 
-        const CHUNK_SIZE = 5;
+        const CHUNK_SIZE = 2;
         for (let i = 0; i < pageImages.length; i += CHUNK_SIZE) {
           const chunk = pageImages.slice(i, i + CHUNK_SIZE);
           const startPage = i + 1;

@@ -8,7 +8,7 @@ export const getPdfPageImageDataUrl = async (pdfUrl: string, pageNum: number): P
     const pdf = await loadingTask.promise;
     const validPageNum = Math.min(Math.max(1, pageNum), pdf.numPages);
     const page = await pdf.getPage(validPageNum);
-    const viewport = page.getViewport({ scale: 2.0 });
+    const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
 
@@ -17,7 +17,7 @@ export const getPdfPageImageDataUrl = async (pdfUrl: string, pageNum: number): P
 
     if (context) {
       await page.render({ canvasContext: context, viewport }).promise;
-      return canvas.toDataURL("image/jpeg", 0.85);
+      return canvas.toDataURL("image/jpeg", 0.75);
     }
   } catch (err) {
     console.error(`Failed to render page ${pageNum} from ${pdfUrl}:`, err);
