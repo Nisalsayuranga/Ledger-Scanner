@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS daily_ledgers (
     
     is_validated BOOLEAN DEFAULT false,
     page_image_url TEXT,
+    ocr_raw_data JSONB,
+    human_edited_fields JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     UNIQUE(batch_id, day_number)
 );
@@ -91,6 +93,8 @@ CREATE TABLE IF NOT EXISTS ledger_transactions (
     fs_status TEXT,
     
     row_order INT NOT NULL,
+    ocr_raw_data JSONB,
+    human_edited_fields JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     UNIQUE(daily_ledger_id, row_order)
 );

@@ -17,6 +17,8 @@ export interface Transaction {
   transaction_type: string;
   fs_status: string;
   row_order: number;
+  ocr_raw_data?: Record<string, any>;
+  human_edited_fields?: string[];
 }
 
 export interface DailyLedger {
@@ -42,6 +44,8 @@ export interface DailyLedger {
   is_validated: boolean;
   page_image_url: string;
   transactions: Transaction[];
+  ocr_raw_data?: Record<string, any>;
+  human_edited_fields?: string[];
 }
 
 export interface ValidationResult {

@@ -18,6 +18,8 @@ interface Props {
   onExport: () => void;
   onReset?: () => void;
   onSaveToSupabase?: () => Promise<void>;
+  isAutosaving?: boolean;
+  lastAutosaveTime?: Date | null;
 }
 
 export const SideBySideDashboard: React.FC<Props> = ({
@@ -30,7 +32,9 @@ export const SideBySideDashboard: React.FC<Props> = ({
   onUpdateLedger,
   onExport,
   onReset,
-  onSaveToSupabase
+  onSaveToSupabase,
+  isAutosaving,
+  lastAutosaveTime
 }) => {
   const [selectedDayIndex, setSelectedDayIndex] = useState(initialDayIndex);
   const [rotation, setRotation] = useState(0);
@@ -559,6 +563,13 @@ export const SideBySideDashboard: React.FC<Props> = ({
             </div>
 
             <div className="flex items-center gap-3">
+              {/* Autosave Indicator */}
+              {isAutosaving ? (
+                <span className="text-xs text-slate-500 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Saving draft...</span>
+              ) : lastAutosaveTime ? (
+                <span className="text-xs text-slate-400">Draft saved {lastAutosaveTime.toLocaleTimeString()}</span>
+              ) : null}
+
               {/* Save Button */}
               {onSaveToSupabase && (
                 <button

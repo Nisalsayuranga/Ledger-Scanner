@@ -45,6 +45,9 @@ export const App: React.FC = () => {
   
   const [reuploadBatchId, setReuploadBatchId] = useState<string | null>(null);
   const reuploadInputRef = React.useRef<HTMLInputElement>(null);
+  const autosaveTimers = React.useRef<{ [idx: number]: NodeJS.Timeout }>({});
+  const [isAutosaving, setIsAutosaving] = useState(false);
+  const [lastAutosaveTime, setLastAutosaveTime] = useState<Date | null>(null);
 
   // Load batches from Supabase DB on app mount
   useEffect(() => {
@@ -151,13 +154,17 @@ export const App: React.FC = () => {
                   variance: extracted.summary?.variance || 0,
                   is_validated: false,
                   page_image_url: imgUrl,
-                  transactions: extracted.transactions || []
+                  transactions: (extracted.transactions || []).map((tx: any) => ({
+                    ...tx,
+                    ocr_raw_data: tx
+                  })),
+                  ocr_raw_data: extracted
                 };
 
-                // Stream into DB idempotently right away
-                const dbLedgerId = await LedgerService.upsertLedger(targetBatch.id, ledger);
+                // Stream into DB idempotently right away (as OCR update)
+                const dbLedgerId = await LedgerService.upsertLedger(targetBatch.id, ledger, true);
                 if (ledger.transactions && ledger.transactions.length > 0) {
-                  await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions);
+                  await TransactionService.upsertTransactions(dbLedgerId, ledger.transactions, true);
                 }
 
                 return ledger;
@@ -467,7 +474,7 @@ export const App: React.FC = () => {
       };
 
       setBatches(prev => prev.map(b => b.id === targetBatch.id ? updatedBatch : b));
-      saveBatchToIndexedDb(updatedBatch);
+
     } catch (err: any) {
       console.error("Reupload failed", err);
       alert("Failed to reupload file: " + err.message);
@@ -565,9 +572,8 @@ export const App: React.FC = () => {
           matchedBatch.branchName
         );
 
-        // Update local IndexedDB
+        // Update local state (no indexedDB needed)
         const updatedBatch = { ...matchedBatch, pdfUrl: uploadResult.publicUrl };
-        await saveBatchToIndexedDb(updatedBatch);
 
         // Update state
         setBatches((prev) =>
@@ -619,8 +625,36 @@ export const App: React.FC = () => {
           initialDayIndex={activeDayIndex}
           ledgers={activeLedgers}
           secondaryLedgers={secondaryLedgers.length > 0 ? secondaryLedgers : (secondaryBatch?.data || [])}
+          isAutosaving={isAutosaving}
+          lastAutosaveTime={lastAutosaveTime}
           onUpdateLedger={(idx, updated) => {
+            const oldLedger = activeLedgers[idx];
             const updatedLedgers = [...activeLedgers];
+            
+            // Track human edited fields on the ledger
+            const editedFields = new Set(oldLedger.human_edited_fields || []);
+            for (const key of Object.keys(updated)) {
+              if (key !== 'human_edited_fields' && key !== 'transactions' && key !== 'ocr_raw_data' && (oldLedger as any)[key] !== (updated as any)[key]) {
+                editedFields.add(key);
+              }
+            }
+            updated.human_edited_fields = Array.from(editedFields);
+            
+            // Track human edited fields on transactions
+            if (updated.transactions && oldLedger.transactions) {
+              updated.transactions = updated.transactions.map((tx, txIdx) => {
+                const oldTx = oldLedger.transactions[txIdx];
+                if (!oldTx) return tx;
+                const txEditedFields = new Set(oldTx.human_edited_fields || []);
+                for (const key of Object.keys(tx)) {
+                  if (key !== 'human_edited_fields' && key !== 'ocr_raw_data' && (oldTx as any)[key] !== (tx as any)[key]) {
+                    txEditedFields.add(key);
+                  }
+                }
+                return { ...tx, human_edited_fields: Array.from(txEditedFields) };
+              });
+            }
+            
             updatedLedgers[idx] = updated;
             setActiveLedgers(updatedLedgers);
 
@@ -628,15 +662,26 @@ export const App: React.FC = () => {
               const updatedBatch = { ...activeBatch, data: updatedLedgers };
               setActiveBatch(updatedBatch);
               setBatches((prev) => prev.map((b) => (b.id === activeBatch.id ? updatedBatch : b)));
-              saveBatchToIndexedDb(updatedBatch);
-              saveBatchToSupabase({
-                branchName: updatedBatch.branchName,
-                year: updatedBatch.year,
-                month: updatedBatch.month,
-                bookCategory: updatedBatch.bookCategory,
-                batchName: updatedBatch.pdfUrl || updatedBatch.filename,
-                ledgers: updatedLedgers
-              }).catch((e) => console.error("Auto Supabase update warn:", e));
+              
+              // Debounced Autosave to Supabase (isOcrUpdate: false)
+              if (autosaveTimers.current[idx]) {
+                clearTimeout(autosaveTimers.current[idx]);
+              }
+              setIsAutosaving(true);
+              autosaveTimers.current[idx] = setTimeout(async () => {
+                try {
+                  const dbLedgerId = await LedgerService.upsertLedger(activeBatch.id, updated, false);
+                  if (updated.transactions && updated.transactions.length > 0) {
+                    await TransactionService.upsertTransactions(dbLedgerId, updated.transactions, false);
+                  }
+                  console.log(`Autosaved Draft for Day ${updated.day_number}`);
+                  setLastAutosaveTime(new Date());
+                } catch (e) {
+                  console.error("Autosave failed:", e);
+                } finally {
+                  setIsAutosaving(false);
+                }
+              }, 1500); // 1.5s debounce
             }
           }}
           onExport={() => exportBatchToExcel(`${activeBatch.branchName}_${activeBatch.year}_${activeBatch.month}_${activeBatch.bookCategory}`, activeLedgers)}
