@@ -3,6 +3,22 @@ import * as pdfjsLib from "pdfjs-dist";
 // Set PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+export const getPdfPageCount = async (fileOrUrl: File | string | ArrayBuffer): Promise<number> => {
+  let docInit: any;
+  if (typeof fileOrUrl === "string") {
+    const res = await fetch(fileOrUrl);
+    if (!res.ok) throw new Error("Failed to fetch PDF");
+    docInit = { data: await res.arrayBuffer() };
+  } else if (fileOrUrl instanceof File) {
+    docInit = { data: await fileOrUrl.arrayBuffer() };
+  } else {
+    docInit = { data: fileOrUrl };
+  }
+
+  const pdf = await pdfjsLib.getDocument(docInit).promise;
+  return pdf.numPages;
+};
+
 export const convertPdfToImages = async (fileOrUrl: File | string | ArrayBuffer): Promise<string[]> => {
   let docInit: any;
   if (typeof fileOrUrl === "string") {

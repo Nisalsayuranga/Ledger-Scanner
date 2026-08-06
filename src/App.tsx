@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { MainDashboard, BatchItem } from "./components/MainDashboard";
 import { SideBySideDashboard } from "./components/SideBySideDashboard";
 import { UploadMetadata } from "./components/PdfUploader";
-import { convertPdfToImages } from "./services/pdfProcessor";
+import { convertPdfToImages, getPdfPageCount } from "./services/pdfProcessor";
 import { extractLedgerFromImage } from "./services/ocrService";
 import { exportBatchToExcel } from "./services/excelExportService";
 import { saveBatchToSupabase, fetchBatchesFromSupabase, deleteBatchFromSupabase, updateBatchBranchInSupabase, uploadPdfToSupabase, updateBatchPdfUrlInSupabase } from "./services/supabaseStorageService";
@@ -306,10 +306,10 @@ export const App: React.FC = () => {
       setProgressText(`Extracting pages for ${file.name} (${idx + 1}/${files.length})...`);
       const detected = detectBranchAndCategoryFromFilename(file.name);
 
-      let imgs: string[] = [];
+      let pageCount = 0;
       let cloudUrl: string | undefined = undefined;
       try {
-        imgs = await convertPdfToImages(file);
+        pageCount = await getPdfPageCount(file);
         
         setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
         cloudUrl = await uploadPdfToSupabase(
@@ -331,12 +331,12 @@ export const App: React.FC = () => {
         month: detected.month,
         bookCategory: detected.bookCategory,
         fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        pageCount: imgs.length,
+        pageCount: pageCount,
         extractedDate: `${detected.year}-${detected.month}`,
         status: "Pending",
         data: [],
         rawFile: file,
-        pageImages: imgs,
+        pageImages: [],
         pdfUrl: cloudUrl
       };
 
@@ -352,9 +352,8 @@ export const App: React.FC = () => {
   const handleProcessPdf = async (file: File, metadata: UploadMetadata) => {
     try {
       setIsProcessing(true);
-      setProgressText(`Extracting PDF page images for ${metadata.branchName}...`);
-
-      const pageImages = await convertPdfToImages(file);
+      setProgressText(`Analyzing PDF metadata for ${metadata.branchName}...`);
+      const pageCount = await getPdfPageCount(file);
 
       setProgressText(`Uploading PDF to Supabase Storage...`);
       const cloudUrl = await uploadPdfToSupabase(
@@ -373,12 +372,12 @@ export const App: React.FC = () => {
         month: metadata.month,
         bookCategory: metadata.bookCategory,
         fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        pageCount: pageImages.length,
+        pageCount: pageCount,
         extractedDate: `${metadata.year}-${metadata.month}`,
         status: "Pending",
         data: [],
         rawFile: file,
-        pageImages: pageImages,
+        pageImages: [],
         pdfUrl: cloudUrl
       };
 
