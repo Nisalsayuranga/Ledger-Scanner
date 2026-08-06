@@ -193,14 +193,25 @@ export const App: React.FC = () => {
         saveBatchToIndexedDb(updatedBatch);
 
         // Auto save to Supabase Database
-        await saveBatchToSupabase({
-          branchName: updatedBatch.branchName,
-          year: updatedBatch.year,
-          month: updatedBatch.month,
-          bookCategory: updatedBatch.bookCategory,
-          batchName: updatedBatch.pdfUrl || updatedBatch.filename,
-          ledgers: parsedLedgers
-        }).catch((e) => console.error("Auto DB save warn:", e));
+        try {
+          const res = await saveBatchToSupabase({
+            branchName: updatedBatch.branchName,
+            year: updatedBatch.year,
+            month: updatedBatch.month,
+            bookCategory: updatedBatch.bookCategory,
+            batchName: updatedBatch.pdfUrl || updatedBatch.filename,
+            ledgers: parsedLedgers
+          });
+
+          if (res && res.batchId) {
+            const finalBatch = { ...updatedBatch, id: res.batchId };
+            setBatches((prev) => prev.map((b) => (b.id === targetBatch.id ? finalBatch : b)));
+            await deleteBatchFromIndexedDb(targetBatch.id);
+            await saveBatchToIndexedDb(finalBatch);
+          }
+        } catch (e) {
+          console.error("Auto DB save warn:", e);
+        }
 
       } catch (err: any) {
         console.error("Background OCR error:", err);
@@ -455,7 +466,7 @@ export const App: React.FC = () => {
         prev.map((b) => (b.id === updatedBatch.id ? { ...b, status: "Pending", data: [] } : b))
       );
     } catch (e: any) {
-      setOcrError({ filename: targetBatch.filename, message: e.message });
+      setOcrError({ batchId: targetBatch.id, filename: targetBatch.filename, message: e.message });
     } finally {
       setIsProcessing(false);
     }

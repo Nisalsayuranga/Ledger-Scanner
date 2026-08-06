@@ -146,9 +146,6 @@ export const saveBatchToSupabase = async (options: SaveBatchOptions) => {
       throw new Error("Could not resolve branch ID in Supabase DB");
     }
 
-    // 2. PREVENT DUPLICATES: Delete existing batch for same branch, year, month, category if it exists
-    await deleteBatchFromSupabase("", branchName, year, month, bookCategory);
-
     // 3. Insert fresh clean ledger batch
     const formattedMonthStr = `${year}-${month < 10 ? '0' + month : month}-01`;
     const { data: batchData, error: batchErr } = await supabase
