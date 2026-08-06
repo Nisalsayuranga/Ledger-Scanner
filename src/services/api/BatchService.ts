@@ -48,6 +48,32 @@ export class BatchService {
   }
 
   /**
+   * Check if a batch already exists for the given dimensions to prevent duplicates.
+   */
+  static async checkIfBatchExists(
+    branchId: string,
+    year: number,
+    month: number,
+    bookCategory: BookCategory
+  ): Promise<boolean> {
+    const { data, error } = await supabase
+      .from("ledger_batches")
+      .select("id")
+      .eq("branch_id", branchId)
+      .eq("year", year)
+      .eq("month", month)
+      .eq("book_category", bookCategory)
+      .limit(1);
+
+    if (error) {
+      console.error("Failed to check batch existence:", error);
+      return false;
+    }
+
+    return data && data.length > 0;
+  }
+
+  /**
    * Idempotently create or get a batch record.
    */
   static async createOrGetBatch(opts: {

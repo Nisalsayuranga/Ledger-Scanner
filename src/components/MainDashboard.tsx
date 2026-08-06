@@ -30,7 +30,7 @@ interface Props {
   onExportBatch: (batch: BatchItem) => void;
   onDeleteBatch: (batch: BatchItem) => void;
   onProcessStart: (file: File, metadata: UploadMetadata) => void;
-  onBulkUploadPdfs: (files: File[]) => void;
+  onRefreshData: () => void;
   onMoveBranchBatch: (batchId: string, newBranch: BranchName) => void;
   onRunOcrOnBatch: (batch: BatchItem) => void;
   isProcessing: boolean;
@@ -47,7 +47,7 @@ export const MainDashboard: React.FC<Props> = ({
   onExportBatch: _onExportBatch,
   onDeleteBatch,
   onProcessStart,
-  onBulkUploadPdfs,
+  onRefreshData,
   onMoveBranchBatch,
   onRunOcrOnBatch,
   isProcessing,
@@ -599,10 +599,7 @@ export const MainDashboard: React.FC<Props> = ({
 
       {showBulkUploadModal && !isProcessing && (
         <BulkPdfUploader
-          onBulkUpload={(files) => {
-            onBulkUploadPdfs(files);
-            setShowBulkUploadModal(false);
-          }}
+          onRefreshData={onRefreshData}
           onClose={() => setShowBulkUploadModal(false)}
         />
       )}

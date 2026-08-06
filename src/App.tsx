@@ -51,32 +51,24 @@ export const App: React.FC = () => {
   const [lastAutosaveTime, setLastAutosaveTime] = useState<Date | null>(null);
 
   // Load batches from Supabase DB on app mount
+  const fetchBatches = async () => {
+    try {
+      const dbBatches = await BatchService.getBatches();
+      setBatches(dbBatches);
+      // Cache authoritative data locally
+      await CacheService.cacheBatches(dbBatches).catch(e => console.warn('Failed to cache batches', e));
+    } catch (err) {
+      console.warn("Failed to load batches from Supabase, attempting offline cache...", err);
+      const cached = await CacheService.getCachedBatches().catch(() => []);
+      setBatches(cached);
+    }
+  };
+
   useEffect(() => {
-    let isMounted = true;
-
-    const loadInitialData = async () => {
-      try {
-        const dbBatches = await BatchService.getBatches();
-        if (isMounted) {
-          setBatches(dbBatches);
-          // Cache authoritative data locally
-          await CacheService.cacheBatches(dbBatches).catch(e => console.warn('Failed to cache batches', e));
-        }
-      } catch (err) {
-        console.warn("Failed to load batches from Supabase, attempting offline cache...", err);
-        const cached = await CacheService.getCachedBatches().catch(() => []);
-        if (isMounted) {
-          setBatches(cached);
-        }
-      }
-    };
-
-    loadInitialData();
-
-    return () => {
-      isMounted = false;
-    };
+    fetchBatches();
   }, []);
+
+
 
   // Background OCR processor queue loop
   useEffect(() => {
@@ -335,63 +327,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // STEP 1: Upload PDF files (NO OCR). Only extract page images and store batch as Pending.
-  const handleBulkUploadPdfs = async (files: File[]) => {
-    setIsProcessing(true);
-    setProgressText(`Extracting PDF page images for ${files.length} files...`);
 
-    const newBatches: BatchItem[] = [];
-
-    for (let idx = 0; idx < files.length; idx++) {
-      const file = files[idx];
-      setProgressText(`Extracting pages for ${file.name} (${idx + 1}/${files.length})...`);
-      const detected = detectBranchAndCategoryFromFilename(file.name);
-
-      let pageCount = 0;
-      let cloudUrl: string | undefined = undefined;
-      let dbBatchId: string | undefined = undefined;
-      try {
-        pageCount = await getPdfPageCount(file);
-        
-          const branchId = await BranchService.resolveBranchId(detected.branchName);
-          dbBatchId = await BatchService.createOrGetBatch({
-            branchId,
-            year: detected.year,
-            month: detected.month,
-            bookCategory: detected.bookCategory,
-            originalFilename: file.name,
-            fileSizeBytes: file.size
-          });
-          
-          setProgressText(`Uploading ${file.name} to Supabase Storage (${idx + 1}/${files.length})...`);
-          cloudUrl = await DocumentService.uploadDocument(file, dbBatchId, branchId, detected.year, detected.month);
-        } catch (e) {
-          console.error(`Failed to convert/upload PDF ${file.name}:`, e);
-        }
-
-      const item: BatchItem = {
-        id: dbBatchId || `batch-bulk-${Date.now()}-${idx}`,
-        filename: file.name,
-        branchName: detected.branchName,
-        year: detected.year,
-        month: detected.month,
-        bookCategory: detected.bookCategory,
-        fileSize: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        pageCount: pageCount,
-        extractedDate: `${detected.year}-${detected.month}`,
-        status: "uploaded",
-        data: [],
-        rawFile: file,
-        pageImages: [],
-        pdfUrl: cloudUrl
-      };
-
-      newBatches.push(item);
-    }
-
-    setBatches((prev) => [...newBatches, ...prev]);
-    setIsProcessing(false);
-  };
 
   // STEP 1 (Single File): Upload PDF (NO OCR). Save batch as Pending with page images.
   const handleProcessPdf = async (file: File, metadata: UploadMetadata) => {
@@ -635,7 +571,7 @@ export const App: React.FC = () => {
           onExportBatch={handleExportBatch}
           onDeleteBatch={handleDeleteBatch}
           onProcessStart={handleProcessPdf}
-          onBulkUploadPdfs={handleBulkUploadPdfs}
+          onRefreshData={fetchBatches}
           onMoveBranchBatch={handleMoveBranchBatch}
           onRunOcrOnBatch={handleRunOcrOnBatch}
           isProcessing={isProcessing}
