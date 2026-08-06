@@ -480,9 +480,46 @@ export const updateBatchPdfUrlInSupabase = async (
     if (targetDbBatchId) {
       const { error } = await supabase
         .from("ledger_batches")
-        .update({ original_pdf_url: newPdfUrl })
+        .update({ original_pdf_url: newPdfUrl, status: "completed" })
         .eq("id", targetDbBatchId);
       if (error) throw error;
+    } else if (branchName) {
+      // If batch does not exist in Supabase DB yet, INSERT IT so it syncs across all devices!
+      let branchId = null;
+      const { data: branchData } = await supabase
+        .from("branches")
+        .select("id")
+        .eq("branch_name", branchName)
+        .maybeSingle();
+
+      if (branchData) {
+        branchId = branchData.id;
+      } else {
+        const { data: newBranch } = await supabase
+          .from("branches")
+          .insert({ branch_name: branchName })
+          .select("id")
+          .single();
+        if (newBranch) branchId = newBranch.id;
+      }
+
+      if (branchId) {
+        const formattedMonthStr = `${year}-${month < 10 ? '0' + month : month}-01`;
+        const { error: insErr } = await supabase
+          .from("ledger_batches")
+          .insert({
+            branch_id: branchId,
+            batch_month: formattedMonthStr,
+            year: year,
+            month: month,
+            book_category: bookCategory,
+            original_pdf_url: newPdfUrl,
+            status: "completed"
+          });
+        if (insErr) {
+          console.error("Error inserting batch into Supabase DB:", insErr);
+        }
+      }
     }
 
     return { success: true };

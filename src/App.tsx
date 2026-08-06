@@ -46,13 +46,41 @@ export const App: React.FC = () => {
       const dbBatches = await fetchBatchesFromSupabase();
       if (isMounted && dbBatches && dbBatches.length > 0) {
         setBatches((prev) => {
-          const existingMap = new Map(prev.map((b) => [b.id, b]));
+          const mergedMap = new Map<string, BatchItem>();
+
+          // 1. Add all DB batches first (authoritative cloud state)
           for (const dbB of dbBatches) {
-            if (!existingMap.has(dbB.id)) {
-              existingMap.set(dbB.id, dbB);
+            mergedMap.set(dbB.id, dbB);
+          }
+
+          // 2. Merge local IDB batches (preserve pageImages or rawFile if available)
+          for (const localB of prev) {
+            const existingDbKey = Array.from(mergedMap.keys()).find((key) => {
+              const b = mergedMap.get(key)!;
+              return (
+                b.id === localB.id ||
+                b.filename === localB.filename ||
+                (b.branchName === localB.branchName &&
+                  b.year === localB.year &&
+                  b.month === localB.month &&
+                  b.bookCategory === localB.bookCategory)
+              );
+            });
+
+            if (existingDbKey) {
+              const dbItem = mergedMap.get(existingDbKey)!;
+              mergedMap.set(existingDbKey, {
+                ...dbItem,
+                pdfUrl: dbItem.pdfUrl || localB.pdfUrl,
+                pageImages: (dbItem.pageImages && dbItem.pageImages.length > 0) ? dbItem.pageImages : localB.pageImages,
+                rawFile: dbItem.rawFile || localB.rawFile
+              });
+            } else {
+              mergedMap.set(localB.id, localB);
             }
           }
-          const merged = Array.from(existingMap.values());
+
+          const merged = Array.from(mergedMap.values());
           saveAllBatchesToIndexedDb(merged);
           return merged;
         });
