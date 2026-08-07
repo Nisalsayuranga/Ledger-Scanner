@@ -86,10 +86,11 @@ export class BatchService {
   }): Promise<string> {
     const formattedMonthStr = `${opts.year}-${String(opts.month).padStart(2, "0")}-01`;
     
-    // UPSERT to avoid duplicate batches
+    // INSERT new batch instead of UPSERT to avoid constraint errors, 
+    // duplicate checking is handled upstream by BulkUploadQueue
     const { data, error } = await supabase
       .from("ledger_batches")
-      .upsert({
+      .insert({
         branch_id: opts.branchId,
         batch_month: formattedMonthStr,
         year: opts.year,
@@ -99,9 +100,6 @@ export class BatchService {
         mime_type: "application/pdf",
         file_size_bytes: opts.fileSizeBytes,
         storage_bucket: "ledger-documents"
-      }, {
-        onConflict: 'branch_id, year, month, book_category',
-        ignoreDuplicates: false
       })
       .select("id")
       .single();
