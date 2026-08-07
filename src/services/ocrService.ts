@@ -3,6 +3,7 @@ import { getPdfPageImageDataUrl } from "./pdfPageRenderer";
 import { BatchService } from "./api/BatchService";
 import { LedgerService } from "./api/LedgerService";
 import { TransactionService } from "./api/TransactionService";
+import { CloudinaryService } from "./api/CloudinaryService";
 import { DailyLedger } from "../types/ledger";
 import { BatchItem } from "../components/MainDashboard";
 import { convertPdfToImages } from "./pdfProcessor";
@@ -174,6 +175,29 @@ export class OcrProcessor {
 
       const yearStr = targetBatch.year || 2025;
       const monthStr = String(targetBatch.month || 10).padStart(2, "0");
+
+      // Upload extracted images to Cloudinary first
+      const cloudinaryUrls: string[] = [];
+      const folderPath = `${targetBatch.branchName}/${yearStr}/${monthStr}`;
+      
+      for (let j = 0; j < pageImages.length; j++) {
+         onProgress?.({
+           progress: j,
+           total: pageImages.length,
+           progressText: `Uploading page ${j + 1} to Cloudinary...`
+         });
+         
+         // Only upload if it's not already a Cloudinary URL
+         if (!pageImages[j].includes('res.cloudinary.com')) {
+           const fileName = `${targetBatch.filename.replace(/\.[^/.]+$/, "")}_page_${j + 1}`;
+           const url = await CloudinaryService.uploadImage(pageImages[j], folderPath, fileName);
+           cloudinaryUrls.push(url);
+         } else {
+           cloudinaryUrls.push(pageImages[j]);
+         }
+      }
+      pageImages = cloudinaryUrls;
+
       const parsedLedgers: DailyLedger[] = [];
 
       const CHUNK_SIZE = 2; // Process 2 pages at a time to respect rate limits
